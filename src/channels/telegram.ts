@@ -1,6 +1,7 @@
 import { Bot } from "grammy"
 import type { Logger } from "pino"
 import { AssistantCore } from "../core/assistant"
+import { PairAttemptStore } from "../core/pair-attempt-store"
 import { WhitelistStore } from "../core/whitelist-store"
 import { splitTextChunks } from "../utils/format-message"
 import { ackOutbox, listOutbox } from "../utils/outbox"
@@ -10,7 +11,10 @@ type TelegramAdapterOptions = {
   logger: Logger
   assistant: AssistantCore
   whitelist: WhitelistStore
+  pairAttempts: PairAttemptStore
   pairToken?: string
+  pairMaxAttempts: number
+  pairLockMinutes: number
 }
 
 function whitelistInstruction(userID: string, filePath: string): string {
@@ -60,6 +64,14 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
   bot.command("pair", async (ctx) => {
     const userID = String(ctx.from?.id ?? ctx.chat.id)
     const token = ctx.match?.toString().trim() ?? ""
+
+    const state = await opts.pairAttempts.getState("telegram", userID)
+    if (state.isLocked) {
+      opts.logger.warn({ userID, failedCount: state.failedCount, lockedUntil: state.lockedUntil }, "telegram pair locked")
+      await ctx.reply("Too many failed attempts. Please try again later.")
+      return
+    }
+
     if (!opts.pairToken) {
       await ctx.reply("Pairing is disabled by admin. Ask admin to whitelist your account.")
       return
@@ -69,9 +81,20 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       return
     }
     if (token !== opts.pairToken) {
+      const next = await opts.pairAttempts.recordFailure("telegram", userID, opts.pairMaxAttempts, opts.pairLockMinutes)
+      opts.logger.warn(
+        { userID, failedCount: next.failedCount, isLocked: next.isLocked, lockedUntil: next.lockedUntil },
+        "telegram pair token mismatch",
+      )
+      if (next.isLocked) {
+        await ctx.reply("Too many failed attempts. Please try again later.")
+        return
+      }
       await ctx.reply("Invalid pairing token.")
       return
     }
+
+    await opts.pairAttempts.clear("telegram", userID)
     const created = await opts.whitelist.add("telegram", userID)
     opts.logger.info({ userID, created }, "telegram pairing")
     await ctx.reply(created ? "Pairing successful. You are now whitelisted." : "You are already whitelisted.")
