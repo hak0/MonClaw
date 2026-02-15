@@ -15,6 +15,8 @@ type AssistantInput = {
 type AssistantOptions = {
   model?: string
   serverUrl?: string
+  serverUsername?: string
+  serverPassword?: string
   hostname: string
   port: number
   heartbeatFile: string
@@ -28,9 +30,31 @@ type OpencodeRuntime = {
   close?: () => Promise<void> | void
 }
 
-function unwrap<T>(value: unknown): T {
-  if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
-    return (value as { data: T }).data
+function stringifyUnknown(value: unknown): string {
+  if (value instanceof Error) return `${value.name}: ${value.message}`
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function unwrap<T>(value: unknown, label = "OpenCode SDK request"): T {
+  if (value && typeof value === "object") {
+    const envelope = value as {
+      data?: T
+      error?: unknown
+      response?: { status?: number; statusText?: string }
+    }
+
+    if (envelope.error) {
+      const status = envelope.response?.status
+      const statusText = envelope.response?.statusText
+      const statusPart = status ? ` (HTTP ${status}${statusText ? ` ${statusText}` : ""})` : ""
+      throw new Error(`${label} failed${statusPart}: ${stringifyUnknown(envelope.error)}`)
+    }
+
+    if ("data" in envelope) return envelope.data as T
   }
   return value as T
 }
@@ -176,7 +200,36 @@ function buildAgentSystemPrompt(memory: string, heartbeatIntervalMinutes: number
 
 async function createRuntime(opts: AssistantOptions): Promise<OpencodeRuntime> {
   if (opts.serverUrl) {
-    return { client: createOpencodeClient({ baseUrl: opts.serverUrl }) }
+    let baseUrl = opts.serverUrl
+    const headers: Record<string, string> = {}
+
+    let username = opts.serverUsername ?? ""
+    let password = opts.serverPassword ?? ""
+
+    try {
+      const parsed = new URL(opts.serverUrl)
+      if (!opts.serverUsername && parsed.username) username = decodeURIComponent(parsed.username)
+      if (!opts.serverPassword && parsed.password) password = decodeURIComponent(parsed.password)
+      if (parsed.username || parsed.password) {
+        parsed.username = ""
+        parsed.password = ""
+        baseUrl = parsed.toString()
+      }
+    } catch {
+      // Keep original URL when parsing fails.
+    }
+
+    if (password) {
+      const token = Buffer.from(`${username}:${password}`).toString("base64")
+      headers.Authorization = `Basic ${token}`
+    }
+
+    return {
+      client: createOpencodeClient({
+        baseUrl,
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      }),
+    }
   }
 
   const fallbackUrl = `http://${opts.hostname}:${opts.port}`
@@ -253,7 +306,7 @@ export class AssistantCore {
       const beforeMessages = toMessages(beforeMessagesResult)
       beforeAssistantSig = assistantSignature(latestAssistantMessage(beforeMessages))
     } catch (error) {
-      this.logger.warn({ error, sessionID }, "assistant preload messages failed")
+      this.logger.warn({ err: error, sessionID }, "assistant preload messages failed")
     }
 
     let response: unknown
@@ -268,7 +321,7 @@ export class AssistantCore {
         },
       } as never)
     } catch (error) {
-      this.logger.error({ error, sessionID }, "assistant prompt call failed")
+      this.logger.error({ err: error, sessionID }, "assistant prompt call failed")
       throw error
     }
 
@@ -343,7 +396,7 @@ export class AssistantCore {
       const mainMessagesResult = await client.session.messages({ path: { id: mainSessionID } } as never)
       recentContext = buildRecentContext(toMessages(mainMessagesResult))
     } catch (error) {
-      this.logger.warn({ error, mainSessionID }, "heartbeat main-session context load failed")
+      this.logger.warn({ err: error, mainSessionID }, "heartbeat main-session context load failed")
     }
 
     let beforeAssistantSig = ""
@@ -351,7 +404,7 @@ export class AssistantCore {
       const beforeMessagesResult = await client.session.messages({ path: { id: heartbeatSessionID } } as never)
       beforeAssistantSig = assistantSignature(latestAssistantMessage(toMessages(beforeMessagesResult)))
     } catch (error) {
-      this.logger.warn({ error, heartbeatSessionID }, "heartbeat preload messages failed")
+      this.logger.warn({ err: error, heartbeatSessionID }, "heartbeat preload messages failed")
     }
     const prompt = [
       "Run these recurring cron tasks for the project.",
@@ -378,7 +431,7 @@ export class AssistantCore {
         },
       } as never)
     } catch (error) {
-      this.logger.error({ error, heartbeatSessionID }, "heartbeat prompt call failed")
+      this.logger.error({ err: error, heartbeatSessionID }, "heartbeat prompt call failed")
       throw error
     }
 
@@ -401,7 +454,7 @@ export class AssistantCore {
         },
       } as never)
     } catch (error) {
-      this.logger.error({ error, mainSessionID }, "heartbeat summary injection failed")
+      this.logger.error({ err: error, mainSessionID }, "heartbeat summary injection failed")
       throw error
     }
 
@@ -425,7 +478,7 @@ export class AssistantCore {
         },
       } as never)
     } catch (error) {
-      this.logger.error({ error, mainSessionID }, "heartbeat notify prompt failed")
+      this.logger.error({ err: error, mainSessionID }, "heartbeat notify prompt failed")
       throw error
     }
 
@@ -445,10 +498,10 @@ export class AssistantCore {
       body: { title: `chat:${key}` },
     } as never)
 
-    const payload = unwrap<Record<string, unknown>>(session)
+    const payload = unwrap<Record<string, unknown>>(session, "session.create")
     const id = payload.id
     if (typeof id !== "string" || id.length === 0) {
-      throw new Error("Failed to create session: missing id")
+      throw new Error(`Failed to create session: missing id in payload ${JSON.stringify(payload)}`)
     }
 
     this.logger.info({ key, sessionID: id }, "created OpenCode session")
@@ -497,7 +550,7 @@ export class AssistantCore {
           )
         }
       } catch (error) {
-        this.logger.warn({ error, sessionID, pollCount }, "polling assistant reply failed")
+        this.logger.warn({ err: error, sessionID, pollCount }, "polling assistant reply failed")
       }
       await new Promise((resolve) => setTimeout(resolve, intervalMs))
     }

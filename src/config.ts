@@ -13,6 +13,8 @@ export type AppConfig = {
   workspaceDir: string
   opencodeModel?: string
   opencodeServerUrl?: string
+  opencodeServerUsername?: string
+  opencodeServerPassword?: string
   opencodeHostname: string
   opencodePort: number
   whitelistFile: string
@@ -74,6 +76,8 @@ export async function loadConfig(): Promise<AppConfig> {
     workspaceDir,
     opencodeModel: await resolveOpencodeModel(Bun.env.OPENCODE_MODEL),
     opencodeServerUrl: Bun.env.OPENCODE_SERVER_URL,
+    opencodeServerUsername: Bun.env.OPENCODE_SERVER_USERNAME,
+    opencodeServerPassword: Bun.env.OPENCODE_SERVER_PASSWORD,
     opencodeHostname: Bun.env.OPENCODE_HOSTNAME ?? "127.0.0.1",
     opencodePort: envInt(Bun.env.OPENCODE_PORT, 4096),
     whitelistFile: resolvePath(cwd, Bun.env.WHITELIST_FILE ?? ".data/whitelist.json"),

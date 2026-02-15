@@ -21,7 +21,7 @@ export function startHeartbeat(intervalMinutes: number, assistant: AssistantCore
       const result = await assistant.runHeartbeatTasks()
       logger.info({ result, durationMs: Date.now() - startedAt }, "heartbeat run completed")
     } catch (error) {
-      logger.error({ error, durationMs: Date.now() - startedAt }, "heartbeat run failed")
+      logger.error({ err: error, durationMs: Date.now() - startedAt }, "heartbeat run failed")
     } finally {
       running = false
     }

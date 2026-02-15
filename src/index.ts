@@ -23,6 +23,8 @@ async function main() {
   const assistant = new AssistantCore(logger, memory, sessions, {
     model: cfg.opencodeModel,
     serverUrl: cfg.opencodeServerUrl,
+    serverUsername: cfg.opencodeServerUsername,
+    serverPassword: cfg.opencodeServerPassword,
     hostname: cfg.opencodeHostname,
     port: cfg.opencodePort,
     heartbeatFile: cfg.heartbeatFile,
@@ -59,7 +61,7 @@ async function main() {
     void assistant.close()
   })
   process.on("uncaughtException", (error) => {
-    logger.error({ error }, "uncaught exception")
+    logger.error({ err: error }, "uncaught exception")
     shutdown(1)
   })
   process.on("unhandledRejection", (reason) => {

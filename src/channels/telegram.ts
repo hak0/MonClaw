@@ -44,7 +44,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
         opts.logger.info({ userID: item.message.userID, chunkCount: chunks.length }, "telegram proactive message sent")
       }
     } catch (error) {
-      opts.logger.warn({ error }, "telegram outbox flush failed")
+      opts.logger.warn({ err: error }, "telegram outbox flush failed")
     } finally {
       flushingOutbox = false
     }
@@ -185,7 +185,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
     } catch (error) {
       opts.logger.error(
         {
-          error,
+          err: error,
           updateID: ctx.update.update_id,
           chatID: ctx.chat.id,
           userID,

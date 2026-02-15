@@ -65,11 +65,11 @@ export async function startWhatsAppAdapter(opts: WhatsAppAdapterOptions): Promis
           await ackOutbox(item.filePath)
           opts.logger.info({ jid: target, chunkCount: chunks.length }, "whatsapp proactive message sent")
         } catch (error) {
-          opts.logger.warn({ error, jid: item.message.userID }, "whatsapp outbox send failed")
+          opts.logger.warn({ err: error, jid: item.message.userID }, "whatsapp outbox send failed")
         }
       }
     } catch (error) {
-      opts.logger.warn({ error }, "whatsapp outbox flush failed")
+      opts.logger.warn({ err: error }, "whatsapp outbox flush failed")
     } finally {
       flushingOutbox = false
     }

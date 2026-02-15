@@ -1,4 +1,4 @@
-import { createOpencode } from "@opencode-ai/sdk"
+import { createOpencode, createOpencodeClient } from "@opencode-ai/sdk"
 
 type SessionMessage = {
   info?: { id?: string; role?: string }
@@ -47,6 +47,33 @@ function extractAssistantText(messages: SessionMessage[]): string | null {
   return null
 }
 
+async function resolveModelFromEnvOrRecent(): Promise<string> {
+  const modelFromEnv = Bun.env.OPENCODE_MODEL?.trim()
+  if (modelFromEnv) return modelFromEnv
+
+  const home = Bun.env.HOME ?? ""
+  const stateHome = Bun.env.XDG_STATE_HOME ?? `${home}/.local/state`
+  const modelFile = `${stateHome}/opencode/model.json`
+  try {
+    const raw = await Bun.file(modelFile).text()
+    const parsed = JSON.parse(raw) as {
+      recent?: Array<{ providerID?: string; modelID?: string }>
+    }
+    const first = parsed.recent?.[0]
+    if (first?.providerID && first?.modelID) return `${first.providerID}/${first.modelID}`
+  } catch {
+    // Ignore and return empty string.
+  }
+
+  return ""
+}
+
+function parseModel(model: string): { providerID: string; modelID: string } | null {
+  const [providerID, ...rest] = model.split("/")
+  if (!providerID || rest.length === 0) return null
+  return { providerID, modelID: rest.join("/") }
+}
+
 async function getFreePort(): Promise<number> {
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -64,48 +91,70 @@ async function main() {
   const requestedTimeoutMs = Number(Bun.env.E2E_TIMEOUT_MS ?? 10_000)
   const timeoutMs = Math.min(Math.max(requestedTimeoutMs, 1_000), 10_000)
   const pollMs = Number(Bun.env.E2E_POLL_MS ?? 700)
-  const port = await getFreePort()
-  const modelFromEnv = Bun.env.OPENCODE_MODEL?.trim()
-  let model = modelFromEnv && modelFromEnv.length > 0 ? modelFromEnv : ""
-  if (!model) {
-    const home = Bun.env.HOME ?? ""
-    const stateHome = Bun.env.XDG_STATE_HOME ?? `${home}/.local/state`
-    const modelFile = `${stateHome}/opencode/model.json`
-    try {
-      const raw = await Bun.file(modelFile).text()
-      const parsed = JSON.parse(raw) as {
-        recent?: Array<{ providerID?: string; modelID?: string }>
-      }
-      const first = parsed.recent?.[0]
-      if (first?.providerID && first?.modelID) model = `${first.providerID}/${first.modelID}`
-    } catch {
-      // Ignore and fail with clear error below.
-    }
-  }
-  if (!model) {
-    throw new Error(
-      "No model available for E2E. Set OPENCODE_MODEL or set a recent model in ~/.local/state/opencode/model.json.",
-    )
-  }
+  const requestedModel = await resolveModelFromEnvOrRecent()
+  const requestedModelConfig = requestedModel ? parseModel(requestedModel) : null
+  const serverUrl = Bun.env.OPENCODE_SERVER_URL?.trim() ?? ""
+  let client: ReturnType<typeof createOpencodeClient>
+  let closeRuntime: (() => void) | null = null
 
-  console.log(`[e2e] starting opencode server on 127.0.0.1:${port}`)
-  const runtime = await createOpencode({
-    hostname: "127.0.0.1",
-    port,
-    config: { model },
-  })
+  if (serverUrl.length > 0) {
+    let baseUrl = serverUrl
+    const headers: Record<string, string> = {}
+
+    let serverUsername = Bun.env.OPENCODE_SERVER_USERNAME ?? ""
+    let serverPassword = Bun.env.OPENCODE_SERVER_PASSWORD?.trim() ?? ""
+
+    try {
+      const parsed = new URL(serverUrl)
+      if (!serverUsername && parsed.username) serverUsername = decodeURIComponent(parsed.username)
+      if (!serverPassword && parsed.password) serverPassword = decodeURIComponent(parsed.password)
+      if (parsed.username || parsed.password) {
+        parsed.username = ""
+        parsed.password = ""
+        baseUrl = parsed.toString()
+      }
+      console.log(`[e2e] using external opencode server: ${parsed.origin}`)
+    } catch {
+      console.log("[e2e] using external opencode server")
+    }
+
+    if (serverPassword) {
+      const token = Buffer.from(`${serverUsername}:${serverPassword}`).toString("base64")
+      headers.Authorization = `Basic ${token}`
+    }
+
+    client = createOpencodeClient({
+      baseUrl,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    })
+  } else {
+    const port = await getFreePort()
+    if (!requestedModel) {
+      throw new Error(
+        "No model available for E2E. Set OPENCODE_MODEL or set a recent model in ~/.local/state/opencode/model.json.",
+      )
+    }
+
+    console.log(`[e2e] starting opencode server on 127.0.0.1:${port}`)
+    const runtime = await createOpencode({
+      hostname: "127.0.0.1",
+      port,
+      config: { model: requestedModel },
+    })
+    client = runtime.client
+    closeRuntime = () => runtime.server.close()
+  }
 
   try {
-    const client = runtime.client
-
     const config = getData<Record<string, unknown>>("config.get", await client.config.get({} as never))
     const activeModel = typeof config.model === "string" ? config.model : null
-    if (!activeModel) {
+    const effectiveModel = activeModel ?? requestedModel
+    if (!effectiveModel) {
       throw new Error(
         "OpenCode has no model configured (config.model is null). Set OPENCODE_MODEL (provider/model) before running this test.",
       )
     }
-    console.log(`[e2e] model: ${activeModel}`)
+    console.log(`[e2e] model: ${effectiveModel}`)
 
     const session = getData<{ id: string }>(
       "session.create",
@@ -120,6 +169,7 @@ async function main() {
       body: {
         noReply: false,
         parts: [{ type: "text", text: "Reply with exactly: E2E_OK" }],
+        ...(requestedModelConfig ? { model: requestedModelConfig } : {}),
       },
     } as never)
     console.log("[e2e] prompt sent; waiting for assistant reply")
@@ -162,7 +212,7 @@ async function main() {
     throw new Error(
       [
         `Timed out after ${timeoutMs}ms waiting for assistant reply`,
-        `model=${JSON.stringify(activeModel)}`,
+        `model=${JSON.stringify(effectiveModel)}`,
         `providerListError=${JSON.stringify(providersResult.error ?? null)}`,
         `connectedProviders=${JSON.stringify(providersResult.data?.connected ?? [])}`,
         `messageCount=${messages.length}`,
@@ -170,8 +220,10 @@ async function main() {
       ].join(" | "),
     )
   } finally {
-    runtime.server.close()
-    console.log("[e2e] server closed")
+    if (closeRuntime) {
+      closeRuntime()
+      console.log("[e2e] server closed")
+    }
   }
 }
 
