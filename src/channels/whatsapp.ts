@@ -7,6 +7,7 @@ import type { Logger } from "pino"
 // @ts-ignore qrcode-terminal ships without bundled types in some installs.
 import qrcode from "qrcode-terminal"
 import { AssistantCore } from "../core/assistant"
+import { PairAttemptStore } from "../core/pair-attempt-store"
 import { WhitelistStore } from "../core/whitelist-store"
 import { splitTextChunks } from "../utils/format-message"
 import { ackOutbox, listOutbox } from "../utils/outbox"
@@ -16,7 +17,10 @@ type WhatsAppAdapterOptions = {
   logger: Logger
   assistant: AssistantCore
   whitelist: WhitelistStore
+  pairAttempts: PairAttemptStore
   pairToken?: string
+  pairMaxAttempts: number
+  pairLockMinutes: number
 }
 
 function extractText(message: any): string {
@@ -134,6 +138,14 @@ export async function startWhatsAppAdapter(opts: WhatsAppAdapterOptions): Promis
 
       if (text.startsWith("/pair")) {
         const token = text.slice("/pair".length).trim()
+
+        const state = await opts.pairAttempts.getState("whatsapp", jid)
+        if (state.isLocked) {
+          opts.logger.warn({ jid, failedCount: state.failedCount, lockedUntil: state.lockedUntil }, "whatsapp pair locked")
+          await sock.sendMessage(jid, { text: "Too many failed attempts. Please try again later." })
+          continue
+        }
+
         if (!opts.pairToken) {
           await sock.sendMessage(jid, { text: "Pairing is disabled by admin. Ask admin to whitelist your account." })
           continue
@@ -143,9 +155,19 @@ export async function startWhatsAppAdapter(opts: WhatsAppAdapterOptions): Promis
           continue
         }
         if (token !== opts.pairToken) {
+          const next = await opts.pairAttempts.recordFailure("whatsapp", jid, opts.pairMaxAttempts, opts.pairLockMinutes)
+          opts.logger.warn(
+            { jid, failedCount: next.failedCount, isLocked: next.isLocked, lockedUntil: next.lockedUntil },
+            "whatsapp pair token mismatch",
+          )
+          if (next.isLocked) {
+            await sock.sendMessage(jid, { text: "Too many failed attempts. Please try again later." })
+            continue
+          }
           await sock.sendMessage(jid, { text: "Invalid pairing token." })
           continue
         }
+        await opts.pairAttempts.clear("whatsapp", jid)
         const created = await opts.whitelist.add("whatsapp", jid)
         opts.logger.info({ jid, created }, "whatsapp pairing")
         await sock.sendMessage(jid, { text: created ? "Pairing successful. You are now whitelisted." : "You are already whitelisted." })

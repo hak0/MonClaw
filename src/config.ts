@@ -17,6 +17,8 @@ export type AppConfig = {
   opencodePort: number
   whitelistFile: string
   whitelistPairToken?: string
+  pairMaxAttempts: number
+  pairLockMinutes: number
 }
 
 function envBool(value: string | undefined, fallback = false): boolean {
@@ -76,5 +78,7 @@ export async function loadConfig(): Promise<AppConfig> {
     opencodePort: envInt(Bun.env.OPENCODE_PORT, 4096),
     whitelistFile: resolvePath(cwd, Bun.env.WHITELIST_FILE ?? ".data/whitelist.json"),
     whitelistPairToken: Bun.env.WHITELIST_PAIR_TOKEN,
+    pairMaxAttempts: envInt(Bun.env.PAIR_MAX_ATTEMPTS, 5),
+    pairLockMinutes: envInt(Bun.env.PAIR_LOCK_MINUTES, 15),
   }
 }

@@ -2,6 +2,7 @@ import { loadConfig } from "./config"
 import { startTelegramAdapter } from "./channels/telegram"
 import { startWhatsAppAdapter } from "./channels/whatsapp"
 import { AssistantCore } from "./core/assistant"
+import { PairAttemptStore } from "./core/pair-attempt-store"
 import { SessionStore } from "./core/session-store"
 import { WhitelistStore } from "./core/whitelist-store"
 import { MemoryStore } from "./memory/store"
@@ -18,6 +19,7 @@ async function main() {
   const memory = new MemoryStore(cfg.workspaceDir)
   const sessions = new SessionStore()
   const whitelist = new WhitelistStore(cfg.whitelistFile)
+  const pairAttempts = new PairAttemptStore()
   const assistant = new AssistantCore(logger, memory, sessions, {
     model: cfg.opencodeModel,
     serverUrl: cfg.opencodeServerUrl,
@@ -29,6 +31,7 @@ async function main() {
 
   await assistant.init()
   await whitelist.init()
+  await pairAttempts.init()
   const heartbeatStatus = await assistant.heartbeatTaskStatus()
   if (heartbeatStatus.empty) {
     logger.warn(
@@ -76,7 +79,10 @@ async function main() {
           logger,
           assistant,
           whitelist,
+          pairAttempts,
           pairToken: cfg.whitelistPairToken,
+          pairMaxAttempts: cfg.pairMaxAttempts,
+          pairLockMinutes: cfg.pairLockMinutes,
         }),
       )
     }
@@ -89,7 +95,10 @@ async function main() {
         logger,
         assistant,
         whitelist,
+        pairAttempts,
         pairToken: cfg.whitelistPairToken,
+        pairMaxAttempts: cfg.pairMaxAttempts,
+        pairLockMinutes: cfg.pairLockMinutes,
       }),
     )
   }

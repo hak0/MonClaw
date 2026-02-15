@@ -60,6 +60,8 @@ Optional:
 - `HEARTBEAT_FILE` (default `.data/heartbeat.md`; empty file disables heartbeat)
 - `WHITELIST_FILE` (default `.data/whitelist.json`)
 - `WHITELIST_PAIR_TOKEN` (required for self-pairing via chat command)
+- `PAIR_MAX_ATTEMPTS` (default 5, max failed `/pair` attempts before temporary lock)
+- `PAIR_LOCK_MINUTES` (default 15, lock duration after reaching max failed attempts)
 
 5. Run:
 
@@ -102,6 +104,12 @@ In Telegram / WhatsApp chat:
 
 - `/remember <text>`: force-save durable memory in `.data/workspace/MEMORY.md`
 - `/pair <token>`: add your account to whitelist (if pairing token is configured)
+
+Pairing protection (new):
+- Failed `/pair` attempts are tracked per `channel:userID` in `.data/pair-attempts.json`.
+- If failures reach `PAIR_MAX_ATTEMPTS`, the user is temporarily locked for `PAIR_LOCK_MINUTES`.
+- During lock period, `/pair` returns a “try again later” message; successful pairing clears prior failure state.
+
 - `/new`: start a new shared main OpenCode session across all channels
 - Any normal message: sent to OpenCode SDK session, with relevant memory context injected
 
@@ -111,6 +119,7 @@ In Telegram / WhatsApp chat:
 - `.data/workspace/MEMORY.md`: durable user memory (single memory file)
 - `.data/whatsapp-auth`: Baileys auth state
 - `.data/whitelist.json`: allowed Telegram/WhatsApp accounts
+- `.data/pair-attempts.json`: failed `/pair` counters + temporary lock state per `channel:userID`
 
 ## Security
 
