@@ -28,6 +28,8 @@ async function main() {
     serverPassword: cfg.opencodeServerPassword,
     heartbeatFile: cfg.heartbeatFile,
     heartbeatIntervalMinutes: cfg.heartbeatIntervalMinutes,
+    inboxDir: cfg.inboxDir,
+    inboxRetentionDays: cfg.inboxRetentionDays,
   })
 
   await assistant.init()
@@ -84,6 +86,8 @@ async function main() {
           pairToken: cfg.whitelistPairToken,
           pairMaxAttempts: cfg.pairMaxAttempts,
           pairLockMinutes: cfg.pairLockMinutes,
+          inboxDir: cfg.inboxDir,
+          inboxRetentionDays: cfg.inboxRetentionDays,
         }),
       )
     }

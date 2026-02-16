@@ -12,6 +12,19 @@ type AssistantInput = {
   text: string
 }
 
+export type PermissionReply = "once" | "always" | "reject"
+
+export type PendingPermission = {
+  id: string
+  sessionID: string
+  permission: string
+  patterns: string[]
+  always: string[]
+  metadata?: Record<string, unknown>
+}
+
+type PermissionAskedListener = (item: PendingPermission) => void | Promise<void>
+
 type AssistantOptions = {
   model?: string
   agent?: string
@@ -21,6 +34,8 @@ type AssistantOptions = {
   serverPassword?: string
   heartbeatFile: string
   heartbeatIntervalMinutes: number
+  inboxDir: string
+  inboxRetentionDays: number
 }
 
 type OpencodeClient = ReturnType<typeof createOpencodeClient>
@@ -162,12 +177,22 @@ function safeString(value: unknown): string | undefined {
 }
 
 
-function buildAgentSystemPrompt(memory: string, heartbeatIntervalMinutes: number): string {
+function buildAgentSystemPrompt(memory: string, heartbeatIntervalMinutes: number, inboxDir: string, inboxRetentionDays: number): string {
   return [
     "Runtime context for MonClaw agent:",
     "Treat this as dynamic state injected by the channel bridge.",
     "",
     `Heartbeat interval: ${heartbeatIntervalMinutes} minutes`,
+    `Media inbox dir: ${inboxDir}`,
+    `Media inbox retention: ${inboxRetentionDays} days`,
+    "",
+    "Telegram media handling policy:",
+    "- Voice/photo uploads may arrive as text prompts that include a local file path under the media inbox.",
+    "- When a file path is present, use tools to inspect or transcribe the file before answering.",
+    "- For audio files, prefer sherpa-stt for transcription.",
+    "- For images, prefer deepseek-ocr to extract visible text, then reason on the extracted text.",
+    "- If media parsing fails, explicitly explain the failure and ask the user for plain text.",
+    "- Treat media files as temporary operational data; do not store their raw content in long-term memory.",
     "",
     "Durable memory snapshot:",
     memory,
@@ -217,6 +242,9 @@ export class AssistantCore {
   private client?: OpencodeClient
   private readonly modelConfig?: { providerID: string; modelID: string }
   private readonly opts: AssistantOptions
+  private readonly pendingPermissions = new Map<string, PendingPermission>()
+  private readonly permissionAskedListeners = new Set<PermissionAskedListener>()
+  private eventAbort?: AbortController
 
   constructor(
     private readonly logger: Logger,
@@ -244,7 +272,12 @@ export class AssistantCore {
     }
 
     const memoryContext = await this.memory.readAll()
-    const systemPrompt = buildAgentSystemPrompt(memoryContext, this.opts.heartbeatIntervalMinutes)
+    const systemPrompt = buildAgentSystemPrompt(
+      memoryContext,
+      this.opts.heartbeatIntervalMinutes,
+      this.opts.inboxDir,
+      this.opts.inboxRetentionDays,
+    )
 
     this.logger.info(
       {
@@ -330,6 +363,71 @@ export class AssistantCore {
     await this.memory.append(note, source)
   }
 
+  async getMainSessionID(): Promise<string> {
+    return this.getOrCreateMainSession()
+  }
+
+  async listPendingPermissions(sessionID?: string): Promise<PendingPermission[]> {
+    const out = Array.from(this.pendingPermissions.values())
+    if (!sessionID) return out
+    return out.filter((item) => item.sessionID === sessionID)
+  }
+
+  async replyPermission(requestID: string, reply: PermissionReply, message?: string, sessionID?: string): Promise<void> {
+    const client = this.ensureClient() as any
+
+    if (client.permission?.reply) {
+      await client.permission.reply({
+        requestID,
+        reply,
+        ...(message ? { message } : {}),
+      })
+      return
+    }
+
+    try {
+      await client._client.post({
+        url: "/permission/{requestID}/reply",
+        path: { requestID },
+        body: {
+          reply,
+          ...(message ? { message } : {}),
+        },
+      })
+      return
+    } catch {
+      // Fall through to deprecated endpoint below.
+    }
+
+    if (!sessionID) {
+      throw new Error("sessionID is required for permission reply fallback")
+    }
+
+    await client.postSessionIdPermissionsPermissionId({
+      path: { id: sessionID, permissionID: requestID },
+      body: {
+        response: reply,
+      },
+    })
+    this.pendingPermissions.delete(requestID)
+  }
+
+  onPermissionAsked(listener: PermissionAskedListener): () => void {
+    this.permissionAskedListeners.add(listener)
+    return () => {
+      this.permissionAskedListeners.delete(listener)
+    }
+  }
+
+  async getLatestAssistantSignature(sessionID: string): Promise<string> {
+    const messages = await this.ensureClient().session.messages({ path: { id: sessionID } } as never)
+    return assistantSignature(latestAssistantMessage(toMessages(messages)))
+  }
+
+  async waitForAssistantAfter(sessionID: string, beforeAssistantSig: string): Promise<string | null> {
+    return this.waitForAssistantReply(sessionID, beforeAssistantSig)
+  }
+
   async heartbeatTaskStatus(): Promise<{ file: string; taskCount: number; empty: boolean }> {
     const file = this.opts.heartbeatFile
     const tasks = await this.loadHeartbeatTasks()
@@ -349,7 +447,12 @@ export class AssistantCore {
     const client = this.ensureClient()
 
     const memoryContext = await this.memory.readAll()
-    const systemPrompt = buildAgentSystemPrompt(memoryContext, this.opts.heartbeatIntervalMinutes)
+    const systemPrompt = buildAgentSystemPrompt(
+      memoryContext,
+      this.opts.heartbeatIntervalMinutes,
+      this.opts.inboxDir,
+      this.opts.inboxRetentionDays,
+    )
 
     let recentContext = ""
     try {
@@ -450,6 +553,8 @@ export class AssistantCore {
   }
 
   async close(): Promise<void> {
+    this.eventAbort?.abort()
+    this.eventAbort = undefined
     // No local OpenCode runtime is spawned in remote-only mode.
   }
 
@@ -566,6 +671,82 @@ export class AssistantCore {
     this.runtime = await createRuntime(this.opts)
     this.client = this.runtime.client
     this.logger.info("using configured remote OpenCode server")
+    this.startEventStream()
+  }
+
+  private startEventStream(): void {
+    if (!this.client || this.eventAbort) return
+    this.eventAbort = new AbortController()
+
+    const run = async () => {
+      while (!this.eventAbort?.signal.aborted) {
+        try {
+          const sse = await (this.ensureClient() as any).event.subscribe({
+            signal: this.eventAbort?.signal,
+          })
+          for await (const event of sse.stream) {
+            this.handleEvent(event)
+            if (this.eventAbort?.signal.aborted) break
+          }
+        } catch (error) {
+          if (this.eventAbort?.signal.aborted) break
+          this.logger.warn({ err: error }, "assistant event stream failed; retrying")
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+      }
+    }
+
+    void run()
+  }
+
+  private handleEvent(rawEvent: unknown): void {
+    const payload = rawEvent && typeof rawEvent === "object" && "payload" in (rawEvent as Record<string, unknown>)
+      ? (rawEvent as { payload: unknown }).payload
+      : rawEvent
+
+    if (!payload || typeof payload !== "object") return
+    const event = payload as { type?: unknown; properties?: unknown }
+    if (typeof event.type !== "string") return
+
+    if (event.type === "permission.updated" || event.type === "permission.asked") {
+      const mapped = this.mapPermissionFromEvent(event.properties)
+      if (!mapped) return
+      this.pendingPermissions.set(mapped.id, mapped)
+      for (const listener of this.permissionAskedListeners) {
+        void Promise.resolve(listener(mapped)).catch((err) => {
+          this.logger.warn({ err }, "permission listener failed")
+        })
+      }
+      return
+    }
+
+    if (event.type === "permission.replied") {
+      const p = event.properties as Record<string, unknown> | undefined
+      const requestID = typeof p?.permissionID === "string" ? p.permissionID : typeof p?.requestID === "string" ? p.requestID : ""
+      if (requestID) this.pendingPermissions.delete(requestID)
+    }
+  }
+
+  private mapPermissionFromEvent(properties: unknown): PendingPermission | null {
+    if (!properties || typeof properties !== "object") return null
+    const p = properties as Record<string, unknown>
+    const id = typeof p.id === "string" ? p.id : ""
+    const sessionID = typeof p.sessionID === "string" ? p.sessionID : ""
+    const permission =
+      typeof p.permission === "string" ? p.permission : typeof p.type === "string" ? p.type : "permission"
+    if (!id || !sessionID) return null
+
+    const patternRaw = p.patterns ?? p.pattern
+    const patterns = Array.isArray(patternRaw)
+      ? patternRaw.filter((x): x is string => typeof x === "string")
+      : typeof patternRaw === "string"
+        ? [patternRaw]
+        : []
+
+    const always = Array.isArray(p.always) ? p.always.filter((x): x is string => typeof x === "string") : []
+    const metadata = p.metadata && typeof p.metadata === "object" ? (p.metadata as Record<string, unknown>) : undefined
+
+    return { id, sessionID, permission, patterns, always, metadata }
   }
 
   private ensureClient(): OpencodeClient {

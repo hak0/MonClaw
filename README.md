@@ -64,6 +64,8 @@ Optional:
 - `WHITELIST_PAIR_TOKEN` (required for self-pairing via chat command)
 - `PAIR_MAX_ATTEMPTS` (default 5, max failed `/pair` attempts before temporary lock)
 - `PAIR_LOCK_MINUTES` (default 15, lock duration after reaching max failed attempts)
+- `INBOX_DIR` (default `.data/inbox`, temp Telegram media files)
+- `INBOX_RETENTION_DAYS` (default 7, auto-delete files older than this)
 
 5. Run:
 
@@ -105,6 +107,7 @@ In Telegram chat:
 
 - `/remember <text>`: force-save durable memory in `.data/workspace/MEMORY.md`
 - `/pair <token>`: add your account to whitelist (if pairing token is configured)
+- `/approvals`: list pending OpenCode permission approvals with Telegram action buttons
 
 Pairing protection (new):
 - Failed `/pair` attempts are tracked per `channel:userID` in `.data/pair-attempts.json`.
@@ -120,6 +123,7 @@ Pairing protection (new):
 - `.data/workspace/MEMORY.md`: durable user memory (single memory file)
 - `.data/whitelist.json`: allowed Telegram accounts
 - `.data/pair-attempts.json`: failed `/pair` counters + temporary lock state per `channel:userID`
+- `.data/inbox/`: temporary incoming Telegram media files (voice/photo + metadata)
 
 ## Security
 

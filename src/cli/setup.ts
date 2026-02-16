@@ -1,10 +1,13 @@
 import { readText, writeText } from "../utils/fs"
 import { resolvePath } from "../utils/path"
 import { saveLastChannel } from "../utils/last-channel"
+import { fileURLToPath } from "node:url"
+import { dirname } from "node:path"
 
 type EnvMap = Record<string, string>
 
-const REPO_ROOT = resolvePath(import.meta.dir, "..", "..")
+const THIS_DIR = dirname(fileURLToPath(import.meta.url))
+const REPO_ROOT = resolvePath(THIS_DIR, "..", "..")
 const ENV_FILE = resolvePath(REPO_ROOT, ".env")
 
 function ask(promptText: string): string {

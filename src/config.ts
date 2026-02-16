@@ -18,6 +18,8 @@ export type AppConfig = {
   whitelistPairToken?: string
   pairMaxAttempts: number
   pairLockMinutes: number
+  inboxDir: string
+  inboxRetentionDays: number
 }
 
 function envBool(value: string | undefined, fallback = false): boolean {
@@ -58,5 +60,7 @@ export async function loadConfig(): Promise<AppConfig> {
     whitelistPairToken: Bun.env.WHITELIST_PAIR_TOKEN,
     pairMaxAttempts: envInt(Bun.env.PAIR_MAX_ATTEMPTS, 5),
     pairLockMinutes: envInt(Bun.env.PAIR_LOCK_MINUTES, 15),
+    inboxDir: resolvePath(cwd, Bun.env.INBOX_DIR ?? ".data/inbox"),
+    inboxRetentionDays: envInt(Bun.env.INBOX_RETENTION_DAYS, 7),
   }
 }
