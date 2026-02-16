@@ -55,6 +55,7 @@ cp .env.example .env
 Optional:
 
 - `OPENCODE_MODEL` in `provider/model` format
+- `OPENCODE_DIRECTORY` to pin sessions under a specific OpenCode project directory
 - `OPENCODE_SERVER_URL` to connect to an existing OpenCode server
 - `OPENCODE_SERVER_PASSWORD` if that server enforces HTTP Basic auth
 - `OPENCODE_SERVER_USERNAME` optional username for Basic auth (defaults to empty username)

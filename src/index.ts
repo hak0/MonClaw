@@ -22,6 +22,7 @@ async function main() {
   const pairAttempts = new PairAttemptStore()
   const assistant = new AssistantCore(logger, memory, sessions, {
     model: cfg.opencodeModel,
+    directory: cfg.opencodeDirectory,
     serverUrl: cfg.opencodeServerUrl,
     serverUsername: cfg.opencodeServerUsername,
     serverPassword: cfg.opencodeServerPassword,

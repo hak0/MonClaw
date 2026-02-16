@@ -12,6 +12,7 @@ export type AppConfig = {
   whatsAppAuthDir: string
   workspaceDir: string
   opencodeModel?: string
+  opencodeDirectory?: string
   opencodeServerUrl?: string
   opencodeServerUsername?: string
   opencodeServerPassword?: string
@@ -75,6 +76,7 @@ export async function loadConfig(): Promise<AppConfig> {
     whatsAppAuthDir: resolvePath(cwd, Bun.env.WHATSAPP_AUTH_DIR ?? ".data/whatsapp-auth"),
     workspaceDir,
     opencodeModel: await resolveOpencodeModel(Bun.env.OPENCODE_MODEL),
+    opencodeDirectory: Bun.env.OPENCODE_DIRECTORY,
     opencodeServerUrl: Bun.env.OPENCODE_SERVER_URL,
     opencodeServerUsername: Bun.env.OPENCODE_SERVER_USERNAME,
     opencodeServerPassword: Bun.env.OPENCODE_SERVER_PASSWORD,

@@ -14,6 +14,7 @@ type AssistantInput = {
 
 type AssistantOptions = {
   model?: string
+  directory?: string
   serverUrl?: string
   serverUsername?: string
   serverPassword?: string
@@ -227,6 +228,7 @@ async function createRuntime(opts: AssistantOptions): Promise<OpencodeRuntime> {
     return {
       client: createOpencodeClient({
         baseUrl,
+        ...(opts.directory ? { directory: opts.directory } : {}),
         ...(Object.keys(headers).length > 0 ? { headers } : {}),
       }),
     }
@@ -247,7 +249,12 @@ async function createRuntime(opts: AssistantOptions): Promise<OpencodeRuntime> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (message.includes("port") || message.includes("EADDRINUSE")) {
-      return { client: createOpencodeClient({ baseUrl: fallbackUrl }) }
+      return {
+        client: createOpencodeClient({
+          baseUrl: fallbackUrl,
+          ...(opts.directory ? { directory: opts.directory } : {}),
+        }),
+      }
     }
     throw error
   }
