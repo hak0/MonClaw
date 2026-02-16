@@ -1,7 +1,7 @@
 import { ensureDir, readJson, writeJson } from "../utils/fs"
 import { dirname, resolvePath } from "../utils/path"
 
-type Channel = "telegram" | "whatsapp"
+type Channel = "telegram"
 
 type PairAttemptRecord = {
   failedCount: number

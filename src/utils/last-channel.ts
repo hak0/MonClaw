@@ -2,7 +2,7 @@ import { ensureDir, writeText } from "./fs"
 import { dirname, resolvePath } from "./path"
 
 export type LastChannel = {
-  channel: "telegram" | "whatsapp"
+  channel: "telegram"
   userID: string
   updatedAt: string
 }

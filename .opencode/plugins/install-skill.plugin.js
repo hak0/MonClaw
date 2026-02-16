@@ -1,7 +1,7 @@
 import { tool } from "@opencode-ai/plugin"
 
 const SEP = "/"
-const SKILLS_DIR = joinPath(Bun.cwd, ".agents", "skills")
+const SKILLS_DIR = joinPath(Bun.cwd, ".opencode", "skills")
 
 function joinPath(...parts) {
   return parts
@@ -48,7 +48,7 @@ export default async ({ $ }) => {
   return {
     tool: {
       install_skill: tool({
-        description: "Install a skill into .agents/skills from a GitHub tree URL.",
+        description: "Install a skill into .opencode/skills from a GitHub tree URL.",
         args: {
           source: tool.schema.string().describe("GitHub tree URL to the skill folder"),
           name: tool.schema.string().optional().describe("Optional target skill folder name"),
@@ -65,7 +65,7 @@ export default async ({ $ }) => {
           const targetDir = joinPath(SKILLS_DIR, targetName)
 
           if (await exists(targetDir)) {
-            return `Skill '${targetName}' already exists at .agents/skills/${targetName}`
+            return `Skill '${targetName}' already exists at .opencode/skills/${targetName}`
           }
 
           const tmpDir = joinPath(
@@ -90,7 +90,7 @@ export default async ({ $ }) => {
             await $`mkdir -p ${targetDir}`
             await $`cp -R ${srcDir}/. ${targetDir}`
 
-            return `Installed skill '${targetName}' to .agents/skills/${targetName}`
+            return `Installed skill '${targetName}' to .opencode/skills/${targetName}`
           } finally {
             await $`rm -rf ${tmpDir}`
           }

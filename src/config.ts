@@ -1,5 +1,4 @@
-import { readText } from "./utils/fs"
-import { joinPath, resolvePath } from "./utils/path"
+import { resolvePath } from "./utils/path"
 
 export type AppConfig = {
   appName: string
@@ -8,16 +7,13 @@ export type AppConfig = {
   heartbeatFile: string
   enableTelegram: boolean
   telegramToken?: string
-  enableWhatsApp: boolean
-  whatsAppAuthDir: string
   workspaceDir: string
   opencodeModel?: string
+  opencodeAgent?: string
   opencodeDirectory?: string
-  opencodeServerUrl?: string
+  opencodeServerUrl: string
   opencodeServerUsername?: string
   opencodeServerPassword?: string
-  opencodeHostname: string
-  opencodePort: number
   whitelistFile: string
   whitelistPairToken?: string
   pairMaxAttempts: number
@@ -36,34 +32,13 @@ function envInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
-async function resolveOpencodeModel(explicitModel: string | undefined): Promise<string> {
-  if (explicitModel && explicitModel.trim().length > 0) return explicitModel.trim()
-
-  const home = Bun.env.HOME ?? ""
-  const stateHome = Bun.env.XDG_STATE_HOME ?? joinPath(home, ".local", "state")
-  const modelFile = joinPath(stateHome, "opencode", "model.json")
-
-  try {
-    const raw = await readText(modelFile)
-    const parsed = JSON.parse(raw) as {
-      recent?: Array<{ providerID?: string; modelID?: string }>
-    }
-    const first = parsed.recent?.[0]
-    if (first?.providerID && first?.modelID) {
-      return `${first.providerID}/${first.modelID}`
-    }
-  } catch {
-    // Fall through to explicit error below.
-  }
-
-  throw new Error(
-    `Missing OPENCODE_MODEL and no recent model found in ${modelFile}. Set OPENCODE_MODEL or pick a model in OpenCode first.`,
-  )
-}
-
 export async function loadConfig(): Promise<AppConfig> {
   const cwd = Bun.cwd
   const workspaceDir = resolvePath(cwd, ".data/workspace")
+  const opencodeServerUrl = Bun.env.OPENCODE_SERVER_URL?.trim()
+  if (!opencodeServerUrl) {
+    throw new Error("Missing OPENCODE_SERVER_URL. MonClaw requires a remote OpenCode server.")
+  }
 
   return {
     appName: Bun.env.APP_NAME ?? "monclaw",
@@ -72,16 +47,13 @@ export async function loadConfig(): Promise<AppConfig> {
     heartbeatFile: resolvePath(cwd, Bun.env.HEARTBEAT_FILE ?? ".data/heartbeat.md"),
     enableTelegram: envBool(Bun.env.ENABLE_TELEGRAM, true),
     telegramToken: Bun.env.TELEGRAM_BOT_TOKEN,
-    enableWhatsApp: envBool(Bun.env.ENABLE_WHATSAPP, false),
-    whatsAppAuthDir: resolvePath(cwd, Bun.env.WHATSAPP_AUTH_DIR ?? ".data/whatsapp-auth"),
     workspaceDir,
-    opencodeModel: await resolveOpencodeModel(Bun.env.OPENCODE_MODEL),
+    opencodeModel: Bun.env.OPENCODE_MODEL,
+    opencodeAgent: Bun.env.OPENCODE_AGENT,
     opencodeDirectory: Bun.env.OPENCODE_DIRECTORY,
-    opencodeServerUrl: Bun.env.OPENCODE_SERVER_URL,
+    opencodeServerUrl,
     opencodeServerUsername: Bun.env.OPENCODE_SERVER_USERNAME,
     opencodeServerPassword: Bun.env.OPENCODE_SERVER_PASSWORD,
-    opencodeHostname: Bun.env.OPENCODE_HOSTNAME ?? "127.0.0.1",
-    opencodePort: envInt(Bun.env.OPENCODE_PORT, 4096),
     whitelistFile: resolvePath(cwd, Bun.env.WHITELIST_FILE ?? ".data/whitelist.json"),
     whitelistPairToken: Bun.env.WHITELIST_PAIR_TOKEN,
     pairMaxAttempts: envInt(Bun.env.PAIR_MAX_ATTEMPTS, 5),

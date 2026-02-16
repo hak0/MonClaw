@@ -14,15 +14,12 @@
   "dependencies": {
     "@opencode-ai/plugin": "1.1.53",
     "@opencode-ai/sdk": "1.1.53",
-    "@whiskeysockets/baileys": "latest",
     "grammy": "latest",
     "opencode-ai": "1.1.53",
-    "pino": "latest",
-    "qrcode-terminal": "latest"
+    "pino": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
-    "@types/qrcode-terminal": "latest",
     "typescript": "latest"
   }
 }

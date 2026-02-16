@@ -1,6 +1,5 @@
 import { loadConfig } from "./config"
 import { startTelegramAdapter } from "./channels/telegram"
-import { startWhatsAppAdapter } from "./channels/whatsapp"
 import { AssistantCore } from "./core/assistant"
 import { PairAttemptStore } from "./core/pair-attempt-store"
 import { SessionStore } from "./core/session-store"
@@ -22,12 +21,11 @@ async function main() {
   const pairAttempts = new PairAttemptStore()
   const assistant = new AssistantCore(logger, memory, sessions, {
     model: cfg.opencodeModel,
+    agent: cfg.opencodeAgent,
     directory: cfg.opencodeDirectory,
     serverUrl: cfg.opencodeServerUrl,
     serverUsername: cfg.opencodeServerUsername,
     serverPassword: cfg.opencodeServerPassword,
-    hostname: cfg.opencodeHostname,
-    port: cfg.opencodePort,
     heartbeatFile: cfg.heartbeatFile,
     heartbeatIntervalMinutes: cfg.heartbeatIntervalMinutes,
   })
@@ -91,23 +89,8 @@ async function main() {
     }
   }
 
-  if (cfg.enableWhatsApp) {
-    starters.push(
-      startWhatsAppAdapter({
-        authDir: cfg.whatsAppAuthDir,
-        logger,
-        assistant,
-        whitelist,
-        pairAttempts,
-        pairToken: cfg.whitelistPairToken,
-        pairMaxAttempts: cfg.pairMaxAttempts,
-        pairLockMinutes: cfg.pairLockMinutes,
-      }),
-    )
-  }
-
   if (starters.length === 0) {
-    logger.warn("No channel enabled. Set ENABLE_TELEGRAM and/or ENABLE_WHATSAPP.")
+    logger.warn("No channel enabled. Set ENABLE_TELEGRAM=true and TELEGRAM_BOT_TOKEN.")
   }
 
   await Promise.all(starters)

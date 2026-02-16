@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Create or update OpenCode skills under .agents/skills with concise, reusable instructions and minimal structure.
+description: Create or update OpenCode skills under .opencode/skills with concise, reusable instructions and minimal structure.
 ---
 
 # Skill Creator
@@ -9,7 +9,7 @@ Use this when asked to create or update a skill.
 
 ## Goal
 
-Create minimal, useful skills in `.agents/skills/<skill-name>/`.
+Create minimal, useful skills in `.opencode/skills/<skill-name>/`.
 
 ## Required structure
 

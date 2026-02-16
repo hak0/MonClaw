@@ -40,11 +40,7 @@ export default async () => {
             return "No last-used channel found yet."
           }
 
-          if (
-            !target ||
-            (target.channel !== "telegram" && target.channel !== "whatsapp") ||
-            typeof target.userID !== "string"
-          ) {
+          if (!target || target.channel !== "telegram" || typeof target.userID !== "string") {
             return "Last-used channel data is invalid."
           }
 

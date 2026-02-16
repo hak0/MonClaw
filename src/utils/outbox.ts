@@ -2,7 +2,7 @@ import { ensureDir, listFiles, readJson, removeFile } from "./fs"
 import { joinPath, resolvePath } from "./path"
 
 export type OutboxMessage = {
-  channel: "telegram" | "whatsapp"
+  channel: "telegram"
   userID: string
   text: string
 }

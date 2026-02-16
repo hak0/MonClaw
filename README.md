@@ -5,7 +5,6 @@
 MonClaw is a minimal implementation of OpenClaw using the OpenCode SDK.
 
 - Telegram adapter (`grammy`)
-- WhatsApp adapter (`baileys`)
 - Single markdown memory file (`MEMORY.md`) loaded on every message
 - Proactive memory updates via an OpenCode plugin tool (`save_memory`)
 - Heartbeat task runner (periodic checklist from `heartbeat.md`)
@@ -15,8 +14,7 @@ MonClaw is a minimal implementation of OpenClaw using the OpenCode SDK.
 
 This project is set up to reuse OpenCode's existing auth mechanisms.
 
-- Default path: uses `createOpencode(...)` so SDK starts/manages a local OpenCode server and uses OpenCode auth/config.
-- Alternate path: set `OPENCODE_SERVER_URL` to connect to an already-running OpenCode server/client setup.
+- Requires `OPENCODE_SERVER_URL` and connects to an already-running OpenCode server/client setup.
 - No app-specific API key is required in this repo.
 
 ## Quick start
@@ -51,15 +49,15 @@ cp .env.example .env
 4. Fill required values in `.env` (manually or via the setup script below):
 
 - `TELEGRAM_BOT_TOKEN` (if Telegram enabled)
+- `OPENCODE_SERVER_URL` to connect to an existing OpenCode server
 
 Optional:
 
 - `OPENCODE_MODEL` in `provider/model` format
+- `OPENCODE_AGENT` to force prompts to use a specific OpenCode agent (default `monclaw`)
 - `OPENCODE_DIRECTORY` to pin sessions under a specific OpenCode project directory
-- `OPENCODE_SERVER_URL` to connect to an existing OpenCode server
 - `OPENCODE_SERVER_PASSWORD` if that server enforces HTTP Basic auth
 - `OPENCODE_SERVER_USERNAME` optional username for Basic auth (defaults to empty username)
-- `ENABLE_WHATSAPP=true`
 - `HEARTBEAT_INTERVAL_MINUTES` (default 30)
 - `HEARTBEAT_FILE` (default `.data/heartbeat.md`; empty file disables heartbeat)
 - `WHITELIST_FILE` (default `.data/whitelist.json`)
@@ -89,10 +87,9 @@ bun run setup
 ```
 
 This will:
-- Enable Telegram and/or WhatsApp
-- Capture bot token or QR login
+- Enable Telegram
+- Capture bot token and remote OpenCode server settings
 - Update `.env`
-- Check OpenCode model auth (launches `opencode` if missing)
 
 ## OpenCode E2E health check
 
@@ -104,7 +101,7 @@ bun run test:opencode:e2e
 
 ## Commands
 
-In Telegram / WhatsApp chat:
+In Telegram chat:
 
 - `/remember <text>`: force-save durable memory in `.data/workspace/MEMORY.md`
 - `/pair <token>`: add your account to whitelist (if pairing token is configured)
@@ -114,15 +111,14 @@ Pairing protection (new):
 - If failures reach `PAIR_MAX_ATTEMPTS`, the user is temporarily locked for `PAIR_LOCK_MINUTES`.
 - During lock period, `/pair` returns a “try again later” message; successful pairing clears prior failure state.
 
-- `/new`: start a new shared main OpenCode session across all channels
+- `/new`: start a new shared main OpenCode session
 - Any normal message: sent to OpenCode SDK session, with relevant memory context injected
 
 ## Data layout
 
 - `.data/sessions.json`: shared `mainSessionID` + separate `heartbeatSessionID`
 - `.data/workspace/MEMORY.md`: durable user memory (single memory file)
-- `.data/whatsapp-auth`: Baileys auth state
-- `.data/whitelist.json`: allowed Telegram/WhatsApp accounts
+- `.data/whitelist.json`: allowed Telegram accounts
 - `.data/pair-attempts.json`: failed `/pair` counters + temporary lock state per `channel:userID`
 
 ## Security

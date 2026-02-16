@@ -1,10 +1,5 @@
-import { DisconnectReason, useMultiFileAuthState } from "@whiskeysockets/baileys"
-import makeWASocket from "@whiskeysockets/baileys"
-// @ts-ignore qrcode-terminal ships without bundled types in some installs.
-import qrcode from "qrcode-terminal"
-import pino from "pino"
-import { ensureDir, readText, writeText } from "../utils/fs"
-import { joinPath, resolvePath } from "../utils/path"
+import { readText, writeText } from "../utils/fs"
+import { resolvePath } from "../utils/path"
 import { saveLastChannel } from "../utils/last-channel"
 
 type EnvMap = Record<string, string>
@@ -63,136 +58,40 @@ async function saveEnvFile(lines: string[]): Promise<void> {
   await writeText(ENV_FILE, lines.join("\n").trimEnd() + "\n")
 }
 
-async function resolveModel(): Promise<string> {
-  const modelFromEnv = Bun.env.OPENCODE_MODEL?.trim()
-  if (modelFromEnv) return modelFromEnv
-
-  const home = Bun.env.HOME ?? ""
-  const stateHome = Bun.env.XDG_STATE_HOME ?? `${home}/.local/state`
-  const modelFile = joinPath(stateHome, "opencode", "model.json")
-  try {
-    const raw = await readText(modelFile)
-    const parsed = JSON.parse(raw) as { recent?: Array<{ providerID?: string; modelID?: string }> }
-    const first = parsed.recent?.[0]
-    if (first?.providerID && first?.modelID) return `${first.providerID}/${first.modelID}`
-  } catch {
-    // ignore
-  }
-  return ""
-}
-
-async function ensureOpencodeAuth(): Promise<void> {
-  const model = await resolveModel()
-  if (model) return
-
-  console.log("OpenCode model not found. Launching 'opencode' for setup...")
-  const proc = Bun.spawn(["opencode", "auth", "login"], { stdin: "inherit", stdout: "inherit", stderr: "inherit" })
-  await proc.exited
-
-  const next = await resolveModel()
-  if (!next) {
-    console.log("Model not found. Use '/models' inside the OpenCode TUI to pick a model.")
-    await Bun.sleep(3_000)
-    const tui = Bun.spawn(["opencode"], { stdin: "inherit", stdout: "inherit", stderr: "inherit" })
-    await tui.exited
-  }
-}
-
-async function waitForWhatsAppOpen(
-  sock: ReturnType<typeof makeWASocket>,
-  showQr: boolean,
-): Promise<"open" | "restart"> {
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("WhatsApp QR timeout")), 2 * 60_000)
-    sock.ev.on("connection.update", (update) => {
-      const { connection, lastDisconnect, qr } = update
-      if (showQr && qr) {
-        qrcode.generate(qr, { small: true })
-      }
-      if (connection === "open") {
-        clearTimeout(timer)
-        resolve("open")
-      }
-      if (connection === "close") {
-        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode
-        const message = (lastDisconnect?.error as any)?.message
-        const streamError = message?.includes("Stream Errored")
-        if (streamError) {
-          clearTimeout(timer)
-          resolve("restart")
-          return
-        }
-        if (statusCode === DisconnectReason.loggedOut) {
-          clearTimeout(timer)
-          reject(new Error("WhatsApp logged out"))
-        }
-      }
-    })
-  })
-}
-
-async function setupWhatsApp(authDir: string): Promise<string> {
-  await ensureDir(authDir)
-  const { state, saveCreds } = await useMultiFileAuthState(authDir)
-
-  let sock = makeWASocket({
-    auth: state,
-    logger: pino({ level: "error" }),
-  })
-  sock.ev.on("creds.update", saveCreds)
-  let userID = ""
-
-  try {
-    const first = await waitForWhatsAppOpen(sock, true)
-    userID = sock.user?.id ?? ""
-    if (first === "restart") {
-      sock.end?.(new Error("restart"))
-      sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: "error" }),
-      })
-      sock.ev.on("creds.update", saveCreds)
-      await waitForWhatsAppOpen(sock, false)
-      userID = sock.user?.id ?? userID
-    }
-  } finally {
-    sock.end?.(new Error("setup complete"))
-  }
-  return userID
-}
-
 async function main(): Promise<void> {
   const lines = await loadEnvFile()
   const current = parseEnv(lines)
   const updates: EnvMap = {}
 
-  const enableTelegram = ask("Enable Telegram? (y/N): ")
-  if (enableTelegram.toLowerCase().startsWith("y")) {
-    const token = ask("Telegram bot token: ")
-    const telegramUserID = ask("Telegram user ID (optional): ")
-    updates.ENABLE_TELEGRAM = "true"
-    if (token) updates.TELEGRAM_BOT_TOKEN = token
-    if (telegramUserID) {
-      await saveLastChannel("telegram", telegramUserID)
-    }
-  } else {
-    updates.ENABLE_TELEGRAM = "false"
+  updates.ENABLE_TELEGRAM = "true"
+
+  const token = ask("Telegram bot token: ") || current.TELEGRAM_BOT_TOKEN || ""
+  if (!token) {
+    console.log("TELEGRAM_BOT_TOKEN is required.")
+    process.exit(1)
+  }
+  updates.TELEGRAM_BOT_TOKEN = token
+
+  const telegramUserID = ask("Telegram user ID (optional): ")
+  if (telegramUserID) {
+    await saveLastChannel("telegram", telegramUserID)
   }
 
-  const enableWhatsApp = ask("Enable WhatsApp? (y/N): ")
-  if (enableWhatsApp.toLowerCase().startsWith("y")) {
-    updates.ENABLE_WHATSAPP = "true"
-    const authDir = current.WHATSAPP_AUTH_DIR || ".data/whatsapp-auth"
-    updates.WHATSAPP_AUTH_DIR = authDir
-    console.log("Scan the QR to connect WhatsApp...")
-    const waUserID = await setupWhatsApp(resolvePath(Bun.cwd, authDir))
-    if (waUserID) {
-      await saveLastChannel("whatsapp", waUserID)
-    }
-    console.log("WhatsApp connected.")
-  } else {
-    updates.ENABLE_WHATSAPP = "false"
+  const serverUrl = ask("OpenCode server URL (required): ") || current.OPENCODE_SERVER_URL || ""
+  if (!serverUrl) {
+    console.log("OPENCODE_SERVER_URL is required.")
+    process.exit(1)
   }
+  updates.OPENCODE_SERVER_URL = serverUrl
+
+  const serverPassword = ask("OpenCode server password (optional): ")
+  if (serverPassword) updates.OPENCODE_SERVER_PASSWORD = serverPassword
+
+  const serverUsername = ask("OpenCode server username (optional): ")
+  if (serverUsername) updates.OPENCODE_SERVER_USERNAME = serverUsername
+
+  const directory = ask("OpenCode directory (optional): ") || current.OPENCODE_DIRECTORY || ""
+  if (directory) updates.OPENCODE_DIRECTORY = directory
 
   console.log("WHITELIST_PAIR_TOKEN allows users to self-pair via '/pair <token>' in chat.")
   const pairTokenPrompt = current.WHITELIST_PAIR_TOKEN
@@ -201,15 +100,8 @@ async function main(): Promise<void> {
   const pairToken = ask(pairTokenPrompt)
   if (pairToken) updates.WHITELIST_PAIR_TOKEN = pairToken
 
-  if (updates.ENABLE_TELEGRAM !== "true" && updates.ENABLE_WHATSAPP !== "true") {
-    console.log("No channels enabled. Aborting setup.")
-    process.exit(1)
-  }
-
   const merged = updateEnvLines(lines, updates)
   await saveEnvFile(merged)
-
-  await ensureOpencodeAuth()
 
   console.log("Setup complete. Run: bun run dev")
   process.exit(0)

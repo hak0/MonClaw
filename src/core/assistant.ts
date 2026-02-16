@@ -1,4 +1,4 @@
-import { createOpencode, createOpencodeClient } from "@opencode-ai/sdk"
+import { createOpencodeClient } from "@opencode-ai/sdk"
 import { ensureDir, readText, writeText } from "../utils/fs"
 import { basename, dirname, relativePath } from "../utils/path"
 import { saveLastChannel } from "../utils/last-channel"
@@ -7,19 +7,18 @@ import { MemoryStore } from "../memory/store"
 import { SessionStore } from "./session-store"
 
 type AssistantInput = {
-  channel: "telegram" | "whatsapp" | "system"
+  channel: "telegram" | "system"
   userID: string
   text: string
 }
 
 type AssistantOptions = {
   model?: string
+  agent?: string
   directory?: string
   serverUrl?: string
   serverUsername?: string
   serverPassword?: string
-  hostname: string
-  port: number
   heartbeatFile: string
   heartbeatIntervalMinutes: number
 }
@@ -28,7 +27,6 @@ type OpencodeClient = ReturnType<typeof createOpencodeClient>
 
 type OpencodeRuntime = {
   client: OpencodeClient
-  close?: () => Promise<void> | void
 }
 
 function stringifyUnknown(value: unknown): string {
@@ -166,97 +164,51 @@ function safeString(value: unknown): string | undefined {
 
 function buildAgentSystemPrompt(memory: string, heartbeatIntervalMinutes: number): string {
   return [
-    "You are MonClaw, an autonomous assistant agent running on top of OpenCode.",
-    "You help with coding and non-coding work: planning, research, writing, operations, and execution tasks.",
-    "Be concise, practical, and proactive.",
-    "Use native OpenCode plugin tools when relevant.",
-    "Output plain text only.",
-    "No Markdown under any circumstances.",
-    "Never use Markdown markers or structure: no headings, no lists, no code fences, no inline code, no bold/italic, no blockquotes, no links.",
-    "Avoid characters commonly used for Markdown formatting (e.g. # * _ ` > -). Use simple sentences instead.",
-    "Do not use tables or any rich formatting because replies are shown in non-Markdown chat surfaces.",
-    "A heartbeat cron runs in a separate session and its summary is added to the main session.",
-    "After heartbeat summaries are added, if the user should be informed, call send_channel_message.",
-    "send_channel_message delivers to the last used channel/user.",
+    "Runtime context for MonClaw agent:",
+    "Treat this as dynamic state injected by the channel bridge.",
     "",
     `Heartbeat interval: ${heartbeatIntervalMinutes} minutes`,
     "",
-    "Memory rules:",
-    "- MEMORY.md is durable user memory only (stable preferences, profile, constraints, recurring goals).",
-    "- Do not store transient one-off chat details.",
-    "- When you discover durable memory, call the save_memory tool.",
-    "- save_memory takes one short, atomic durable fact per call.",
-    "",
-    "Skills rules:",
-    "- If the user asks to install/pull a skill, use the install_skill tool.",
-    "- install_skill supports GitHub tree URLs only.",
-    "- Installed skills must be placed under .agents/skills.",
-    "- Self-improve: if a task would benefit from a reusable workflow, or repeats, or could be standardized, proactively use skill-creator to draft a new skill after the task is handled.",
-    "- Also suggest skill-creator when the user asks for something new that seems like a reusable capability.",
-    "",
-    "Current memory:",
+    "Durable memory snapshot:",
     memory,
   ].join("\n")
 }
 
 async function createRuntime(opts: AssistantOptions): Promise<OpencodeRuntime> {
-  if (opts.serverUrl) {
-    let baseUrl = opts.serverUrl
-    const headers: Record<string, string> = {}
-
-    let username = opts.serverUsername ?? ""
-    let password = opts.serverPassword ?? ""
-
-    try {
-      const parsed = new URL(opts.serverUrl)
-      if (!opts.serverUsername && parsed.username) username = decodeURIComponent(parsed.username)
-      if (!opts.serverPassword && parsed.password) password = decodeURIComponent(parsed.password)
-      if (parsed.username || parsed.password) {
-        parsed.username = ""
-        parsed.password = ""
-        baseUrl = parsed.toString()
-      }
-    } catch {
-      // Keep original URL when parsing fails.
-    }
-
-    if (password) {
-      const token = Buffer.from(`${username}:${password}`).toString("base64")
-      headers.Authorization = `Basic ${token}`
-    }
-
-    return {
-      client: createOpencodeClient({
-        baseUrl,
-        ...(opts.directory ? { directory: opts.directory } : {}),
-        ...(Object.keys(headers).length > 0 ? { headers } : {}),
-      }),
-    }
+  if (!opts.serverUrl) {
+    throw new Error("Missing OPENCODE_SERVER_URL. This deployment requires a remote OpenCode server.")
   }
 
-  const fallbackUrl = `http://${opts.hostname}:${opts.port}`
-  try {
-    const runtime = await createOpencode({
-      hostname: opts.hostname,
-      port: opts.port,
-      ...(opts.model ? { config: { model: opts.model } } : {}),
-    })
+  let baseUrl = opts.serverUrl
+  const headers: Record<string, string> = {}
 
-    return {
-      client: runtime.client,
-      close: () => runtime.server.close(),
+  let username = opts.serverUsername ?? ""
+  let password = opts.serverPassword ?? ""
+
+  try {
+    const parsed = new URL(opts.serverUrl)
+    if (!opts.serverUsername && parsed.username) username = decodeURIComponent(parsed.username)
+    if (!opts.serverPassword && parsed.password) password = decodeURIComponent(parsed.password)
+    if (parsed.username || parsed.password) {
+      parsed.username = ""
+      parsed.password = ""
+      baseUrl = parsed.toString()
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message.includes("port") || message.includes("EADDRINUSE")) {
-      return {
-        client: createOpencodeClient({
-          baseUrl: fallbackUrl,
-          ...(opts.directory ? { directory: opts.directory } : {}),
-        }),
-      }
-    }
-    throw error
+  } catch {
+    // Keep original URL when parsing fails.
+  }
+
+  if (password) {
+    const token = Buffer.from(`${username}:${password}`).toString("base64")
+    headers.Authorization = `Basic ${token}`
+  }
+
+  return {
+    client: createOpencodeClient({
+      baseUrl,
+      ...(opts.directory ? { directory: opts.directory } : {}),
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    }),
   }
 }
 
@@ -287,7 +239,7 @@ export class AssistantCore {
     const client = this.ensureClient()
     const sessionID = await this.getOrCreateMainSession()
 
-    if (input.channel === "telegram" || input.channel === "whatsapp") {
+    if (input.channel === "telegram") {
       await saveLastChannel(input.channel, input.userID)
     }
 
@@ -322,6 +274,7 @@ export class AssistantCore {
         path: { id: sessionID },
         body: {
           noReply: false,
+          ...(this.opts.agent ? { agent: this.opts.agent } : {}),
           system: systemPrompt,
           parts: [{ type: "text", text: input.text }],
           ...(this.modelConfig ? { model: this.modelConfig } : {}),
@@ -432,6 +385,7 @@ export class AssistantCore {
         path: { id: heartbeatSessionID },
         body: {
           noReply: false,
+          ...(this.opts.agent ? { agent: this.opts.agent } : {}),
           system: systemPrompt,
           parts: [{ type: "text", text: prompt }],
           ...(this.modelConfig ? { model: this.modelConfig } : {}),
@@ -456,6 +410,7 @@ export class AssistantCore {
         path: { id: mainSessionID },
         body: {
           noReply: true,
+          ...(this.opts.agent ? { agent: this.opts.agent } : {}),
           parts: [{ type: "text", text: `[Heartbeat summary]\\n${summary}` }],
           ...(this.modelConfig ? { model: this.modelConfig } : {}),
         },
@@ -470,6 +425,7 @@ export class AssistantCore {
         path: { id: mainSessionID },
         body: {
           noReply: false,
+          ...(this.opts.agent ? { agent: this.opts.agent } : {}),
           parts: [
             {
               type: "text",
@@ -494,9 +450,7 @@ export class AssistantCore {
   }
 
   async close(): Promise<void> {
-    if (typeof this.runtime?.close === "function") {
-      await this.runtime.close()
-    }
+    // No local OpenCode runtime is spawned in remote-only mode.
   }
 
   private async createSession(key: string): Promise<string> {
@@ -611,9 +565,7 @@ export class AssistantCore {
     if (this.client) return
     this.runtime = await createRuntime(this.opts)
     this.client = this.runtime.client
-    if (!this.runtime.close) {
-      this.logger.warn("Using existing OpenCode server instance (no local server spawned)")
-    }
+    this.logger.info("using configured remote OpenCode server")
   }
 
   private ensureClient(): OpencodeClient {

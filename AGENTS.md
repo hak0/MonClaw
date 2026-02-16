@@ -18,7 +18,7 @@ Startup flow:
 1. Load config from `src/config.ts`.
 2. Set `OPENCODE_CONFIG_DIR` to this repo.
 3. Initialize `AssistantCore`, `MemoryStore`, `SessionStore`, `WhitelistStore`.
-4. Start Telegram/WhatsApp adapters.
+4. Start Telegram adapter.
 5. Start heartbeat scheduler if `.data/heartbeat.md` has tasks.
 
 ## OpenCode Integration
@@ -40,12 +40,7 @@ Telegram: `src/channels/telegram.ts`
 - `/pair`, `/new`, `/remember`
 - typing indicator
 
-WhatsApp: `src/channels/whatsapp.ts`
-- `@whiskeysockets/baileys`
-- `/pair`, `/new`, `/remember`
-- QR login + reconnect
-
-Both enforce whitelist and chunk long replies.
+Telegram adapter enforces whitelist and chunks long replies.
 
 ## Memory
 
@@ -84,7 +79,7 @@ Destination:
 
 Configured in `opencode.json`:
 
-- `install_skill` → installs GitHub tree URL skill into `.agents/skills/`
+- `install_skill` → installs GitHub tree URL skill into `.opencode/skills/`
 - `save_memory` → append to memory file
 - `send_channel_message` → queue proactive message
 
@@ -101,7 +96,6 @@ Whitelist: `.data/whitelist.json`
 - `.data/whitelist.json`
 - `.data/last-channel.json`
 - `.data/outbox/`
-- `.data/whatsapp-auth/`
 - `.data/heartbeat.md`
 
 ## Commands
@@ -127,5 +121,5 @@ Developer:
 ## Extension Points
 
 - Add channels under `src/channels/`.
-- Add tools via `.agents/plugins/*.plugin.js` and register in `opencode.json`.
-- Add skills under `.agents/skills/`.
+- Add tools via `.opencode/plugins/*.plugin.js` and register in `opencode.json`.
+- Add skills under `.opencode/skills/`.
