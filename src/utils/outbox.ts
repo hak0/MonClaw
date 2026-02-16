@@ -1,4 +1,4 @@
-import { ensureDir, listFiles, readJson, removeFile } from "./fs"
+import { ensureDir, listFiles, readJson, removeFile, writeJson } from "./fs"
 import { joinPath, resolvePath } from "./path"
 
 export type OutboxMessage = {
@@ -13,6 +13,18 @@ type Pending = {
 }
 
 const outboxDir = resolvePath(Bun.cwd, ".data/outbox")
+
+export async function queueOutbox(message: OutboxMessage): Promise<string> {
+  await ensureDir(outboxDir)
+  const filePath = joinPath(outboxDir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`)
+  await writeJson(filePath, {
+    channel: message.channel,
+    userID: message.userID,
+    text: message.text,
+    createdAt: new Date().toISOString(),
+  })
+  return filePath
+}
 
 export async function listOutbox(channel: OutboxMessage["channel"]): Promise<Pending[]> {
   await ensureDir(outboxDir)

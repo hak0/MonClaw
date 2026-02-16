@@ -5,6 +5,10 @@ export type AppConfig = {
   logLevel: string
   heartbeatIntervalMinutes: number
   heartbeatFile: string
+  asyncBashQueueDir: string
+  asyncBashConcurrency: number
+  asyncBashReportSeconds: number
+  asyncBashDefaultTimeoutMs: number
   enableTelegram: boolean
   telegramToken?: string
   workspaceDir: string
@@ -47,6 +51,10 @@ export async function loadConfig(): Promise<AppConfig> {
     logLevel: Bun.env.LOG_LEVEL ?? "info",
     heartbeatIntervalMinutes: envInt(Bun.env.HEARTBEAT_INTERVAL_MINUTES, 30),
     heartbeatFile: resolvePath(cwd, Bun.env.HEARTBEAT_FILE ?? ".data/heartbeat.md"),
+    asyncBashQueueDir: resolvePath(cwd, Bun.env.ASYNC_BASH_QUEUE_DIR ?? ".data/async-jobs"),
+    asyncBashConcurrency: envInt(Bun.env.ASYNC_BASH_CONCURRENCY, 1),
+    asyncBashReportSeconds: envInt(Bun.env.ASYNC_BASH_REPORT_SECONDS, 60),
+    asyncBashDefaultTimeoutMs: envInt(Bun.env.ASYNC_BASH_DEFAULT_TIMEOUT_MS, 86_400_000),
     enableTelegram: envBool(Bun.env.ENABLE_TELEGRAM, true),
     telegramToken: Bun.env.TELEGRAM_BOT_TOKEN,
     workspaceDir,

@@ -363,6 +363,22 @@ export class AssistantCore {
     await this.memory.append(note, source)
   }
 
+  async injectMainContext(text: string): Promise<void> {
+    const content = text.trim()
+    if (!content) return
+
+    const sessionID = await this.getOrCreateMainSession()
+    await this.ensureClient().session.prompt({
+      path: { id: sessionID },
+      body: {
+        noReply: true,
+        ...(this.opts.agent ? { agent: this.opts.agent } : {}),
+        parts: [{ type: "text", text: content }],
+        ...(this.modelConfig ? { model: this.modelConfig } : {}),
+      },
+    } as never)
+  }
+
   async getMainSessionID(): Promise<string> {
     return this.getOrCreateMainSession()
   }

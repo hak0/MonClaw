@@ -60,6 +60,10 @@ Optional:
 - `OPENCODE_SERVER_USERNAME` optional username for Basic auth (defaults to empty username)
 - `HEARTBEAT_INTERVAL_MINUTES` (default 30)
 - `HEARTBEAT_FILE` (default `.data/heartbeat.md`; empty file disables heartbeat)
+- `ASYNC_BASH_QUEUE_DIR` (default `.data/async-jobs`)
+- `ASYNC_BASH_CONCURRENCY` (default 1)
+- `ASYNC_BASH_REPORT_SECONDS` (default 60)
+- `ASYNC_BASH_DEFAULT_TIMEOUT_MS` (default 86400000, i.e. 24h)
 - `WHITELIST_FILE` (default `.data/whitelist.json`)
 - `WHITELIST_PAIR_TOKEN` (required for self-pairing via chat command)
 - `PAIR_MAX_ATTEMPTS` (default 5, max failed `/pair` attempts before temporary lock)
@@ -124,6 +128,7 @@ Pairing protection (new):
 - `.data/whitelist.json`: allowed Telegram accounts
 - `.data/pair-attempts.json`: failed `/pair` counters + temporary lock state per `channel:userID`
 - `.data/inbox/`: temporary incoming Telegram media files (voice/photo + metadata)
+- `.data/async-jobs/`: async_bash queue (`*.json`) and execution logs (`output/*.log`)
 
 ## Security
 

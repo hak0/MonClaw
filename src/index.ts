@@ -5,6 +5,7 @@ import { PairAttemptStore } from "./core/pair-attempt-store"
 import { SessionStore } from "./core/session-store"
 import { WhitelistStore } from "./core/whitelist-store"
 import { MemoryStore } from "./memory/store"
+import { startAsyncBashScheduler } from "./scheduler/async-bash"
 import { startHeartbeat } from "./scheduler/heartbeat"
 import { createLogger } from "./utils/logger"
 
@@ -46,6 +47,15 @@ async function main() {
   } else {
     startHeartbeat(cfg.heartbeatIntervalMinutes, assistant, logger)
   }
+
+  startAsyncBashScheduler({
+    queueDir: cfg.asyncBashQueueDir,
+    concurrency: cfg.asyncBashConcurrency,
+    reportSeconds: cfg.asyncBashReportSeconds,
+    defaultTimeoutMs: cfg.asyncBashDefaultTimeoutMs,
+    assistant,
+    logger,
+  })
 
   let shuttingDown = false
   const shutdown = (code: number) => {
