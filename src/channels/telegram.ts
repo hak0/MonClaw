@@ -1,6 +1,6 @@
 import { Bot, InlineKeyboard } from "grammy"
 import type { Logger } from "pino"
-import { AssistantCore, type PendingPermission, type PermissionReply } from "../core/assistant"
+import { AssistantCore, type PendingPermission, type PendingQuestion, type PermissionReply } from "../core/assistant"
 import { PairAttemptStore } from "../core/pair-attempt-store"
 import { WhitelistStore } from "../core/whitelist-store"
 import { splitTextChunks } from "../utils/format-message"
@@ -44,6 +44,21 @@ function decodeApprovalAction(data: string): { action: PermissionReply; requestI
   return { action, requestID }
 }
 
+function encodeQuestionAction(requestID: string, questionIndex: number, optionIndex: number): string {
+  return `qst:${requestID}:${questionIndex}:${optionIndex}`
+}
+
+function decodeQuestionAction(data: string): { requestID: string; questionIndex: number; optionIndex: number } | null {
+  const parts = data.split(":")
+  if (parts.length !== 4 || parts[0] !== "qst") return null
+  const requestID = parts[1]?.trim()
+  const questionIndex = Number.parseInt(parts[2] ?? "", 10)
+  const optionIndex = Number.parseInt(parts[3] ?? "", 10)
+  if (!requestID || !Number.isFinite(questionIndex) || !Number.isFinite(optionIndex)) return null
+  if (questionIndex < 0 || optionIndex < 0) return null
+  return { requestID, questionIndex, optionIndex }
+}
+
 function approvalKeyboard(requestID: string): InlineKeyboard {
   return new InlineKeyboard()
     .text("Allow once", encodeApprovalAction("once", requestID))
@@ -52,9 +67,42 @@ function approvalKeyboard(requestID: string): InlineKeyboard {
     .text("Reject", encodeApprovalAction("reject", requestID))
 }
 
+function questionKeyboard(requestID: string, question: PendingQuestion["questions"][number], questionIndex: number): InlineKeyboard {
+  const keyboard = new InlineKeyboard()
+  for (let i = 0; i < question.options.length; i += 1) {
+    keyboard.text(question.options[i].label, encodeQuestionAction(requestID, questionIndex, i)).row()
+  }
+  return keyboard
+}
+
 function formatPermissionLine(item: PendingPermission): string {
   const patterns = item.patterns.length > 0 ? item.patterns.join(", ") : "<none>"
   return [`Permission: ${item.permission}`, `Patterns: ${patterns}`, `Request ID: ${item.id}`].join("\n")
+}
+
+function formatQuestionLine(item: PendingQuestion, index: number): string {
+  const q = item.questions[index]
+  if (!q) return `Question request: ${item.id}`
+  const mode = q.multiple ? "multiple" : "single"
+  return [
+    `Question: ${q.header}`,
+    q.question,
+    `Mode: ${mode}`,
+    `Request ID: ${item.id}`,
+  ].join("\n")
+}
+
+function canUseInlineQuestion(item: PendingQuestion): boolean {
+  if (item.questions.length !== 1) return false
+  const q = item.questions[0]
+  if (!q || q.multiple) return false
+  return q.options.length > 0
+}
+
+function parseQuestionAnswers(raw: string): Array<Array<string>> {
+  return raw
+    .split(";")
+    .map((group) => group.split(",").map((part) => part.trim()).filter(Boolean))
 }
 
 function pickFileExtension(filePath: string | undefined, fallback: string): string {
@@ -97,20 +145,18 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
   const activeChats = new Set<number>()
   const activeSessionRequests = new Map<string, { chatID: number; userID: string }>()
   const announcedPermissionIDs = new Set<string>()
+  const announcedQuestionIDs = new Set<string>()
 
   const showPendingApprovals = async (ctx: { reply: (text: string, extra?: any) => Promise<unknown> }, userID: string) => {
     const allowed = opts.whitelist.isWhitelisted("telegram", userID)
     if (!allowed) {
       await ctx.reply(whitelistInstruction(userID, opts.whitelist.displayFile()))
-      return 0
+      return { permissionCount: 0, questionCount: 0 }
     }
 
     const sessionID = await opts.assistant.getMainSessionID()
     const pending = await opts.assistant.listPendingPermissions(sessionID)
-    if (pending.length === 0) {
-      await ctx.reply("No pending approvals for the current session.")
-      return 0
-    }
+    const pendingQuestions = await opts.assistant.listPendingQuestions(sessionID)
 
     for (const item of pending) {
       await ctx.reply(formatPermissionLine(item), {
@@ -118,7 +164,27 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       })
       announcedPermissionIDs.add(item.id)
     }
-    return pending.length
+
+    for (const item of pendingQuestions) {
+      announcedQuestionIDs.add(item.id)
+      if (canUseInlineQuestion(item)) {
+        const q = item.questions[0]
+        await ctx.reply(formatQuestionLine(item, 0), {
+          reply_markup: questionKeyboard(item.id, q, 0),
+        })
+        continue
+      }
+      for (let i = 0; i < item.questions.length; i += 1) {
+        await ctx.reply(formatQuestionLine(item, i))
+      }
+      await ctx.reply(["Reply with /answer <requestID> <answers>.", "For multiple questions use ';' between questions and ',' between labels."].join("\n"))
+    }
+
+    if (pending.length === 0 && pendingQuestions.length === 0) {
+      await ctx.reply("No pending approvals or questions for the current session.")
+    }
+
+    return { permissionCount: pending.length, questionCount: pendingQuestions.length }
   }
 
   const notifyPendingApproval = async (item: PendingPermission) => {
@@ -133,9 +199,41 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
     await bot.api.sendMessage(target.chatID, "OpenCode is waiting for approval. Tap a button above or run /approvals.")
   }
 
+  const notifyPendingQuestion = async (item: PendingQuestion) => {
+    if (announcedQuestionIDs.has(item.id)) return
+    const target = activeSessionRequests.get(item.sessionID)
+    if (!target) return
+
+    announcedQuestionIDs.add(item.id)
+    if (canUseInlineQuestion(item)) {
+      const q = item.questions[0]
+      await bot.api.sendMessage(target.chatID, formatQuestionLine(item, 0), {
+        reply_markup: questionKeyboard(item.id, q, 0),
+      })
+      await bot.api.sendMessage(target.chatID, "OpenCode needs your choice. Tap an option above.")
+      return
+    }
+
+    await bot.api.sendMessage(
+      target.chatID,
+      [
+        ...item.questions.map((_, i) => formatQuestionLine(item, i)),
+        "OpenCode needs your answer.",
+        "Reply with /answer <requestID> <answers>.",
+        "For multiple questions use ';' between questions and ',' between labels.",
+      ].join("\n"),
+    )
+  }
+
   opts.assistant.onPermissionAsked((item) => {
     void notifyPendingApproval(item).catch((error) => {
       opts.logger.warn({ err: error, sessionID: item.sessionID, permissionID: item.id }, "failed to notify pending approval")
+    })
+  })
+
+  opts.assistant.onQuestionAsked((item) => {
+    void notifyPendingQuestion(item).catch((error) => {
+      opts.logger.warn({ err: error, sessionID: item.sessionID, requestID: item.id }, "failed to notify pending question")
     })
   })
 
@@ -172,6 +270,35 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
     } finally {
       pruningInbox = false
     }
+  }
+
+  const continueAfterUserInput = (params: { chatID: number; userID: string; sessionID: string; beforeAssistantSig: string; source: string }) => {
+    void (async () => {
+      try {
+        const text = await opts.assistant.waitForAssistantAfter(params.sessionID, params.beforeAssistantSig)
+        if (!text) return
+        const chunks = splitTextChunks(text, 3000)
+        for (const chunk of chunks) {
+          await bot.api.sendMessage(params.chatID, chunk)
+        }
+        opts.logger.info(
+          {
+            chatID: params.chatID,
+            userID: params.userID,
+            sessionID: params.sessionID,
+            source: params.source,
+            answerLength: text.length,
+            chunkCount: chunks.length,
+          },
+          "telegram follow-up reply sent",
+        )
+      } catch (error) {
+        opts.logger.warn(
+          { err: error, chatID: params.chatID, userID: params.userID, sessionID: params.sessionID, source: params.source },
+          "telegram follow-up reply failed",
+        )
+      }
+    })()
   }
 
   bot.command("start", async (ctx) => {
@@ -256,23 +383,85 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
 
   bot.command("approvals", async (ctx) => {
     const userID = String(ctx.from?.id ?? ctx.chat.id)
-    const count = await showPendingApprovals(ctx, userID)
-    opts.logger.info({ chatID: ctx.chat.id, userID, count }, "telegram /approvals")
+    const counts = await showPendingApprovals(ctx, userID)
+    opts.logger.info({ chatID: ctx.chat.id, userID, ...counts }, "telegram /approvals")
   })
 
   bot.command("approval", async (ctx) => {
     const userID = String(ctx.from?.id ?? ctx.chat.id)
-    const count = await showPendingApprovals(ctx, userID)
-    opts.logger.info({ chatID: ctx.chat.id, userID, count }, "telegram /approval")
+    const counts = await showPendingApprovals(ctx, userID)
+    opts.logger.info({ chatID: ctx.chat.id, userID, ...counts }, "telegram /approval")
+  })
+
+  bot.command("answer", async (ctx) => {
+    const userID = String(ctx.from?.id ?? ctx.chat.id)
+    const chatID = ctx.chat?.id
+    if (!chatID) {
+      await ctx.reply("Could not determine chat target for this answer.")
+      return
+    }
+    const allowed = opts.whitelist.isWhitelisted("telegram", userID)
+    if (!allowed) {
+      await ctx.reply(whitelistInstruction(userID, opts.whitelist.displayFile()))
+      return
+    }
+
+    const raw = ctx.match?.toString().trim() ?? ""
+    const splitAt = raw.indexOf(" ")
+    if (!raw || splitAt <= 0) {
+      await ctx.reply("Usage: /answer <requestID> <answers>")
+      return
+    }
+
+    const requestID = raw.slice(0, splitAt).trim()
+    const answerText = raw.slice(splitAt + 1).trim()
+    if (!requestID || !answerText) {
+      await ctx.reply("Usage: /answer <requestID> <answers>")
+      return
+    }
+
+    const sessionID = await opts.assistant.getMainSessionID()
+    const pending = await opts.assistant.listPendingQuestions(sessionID)
+    const current = pending.find((item) => item.id === requestID)
+    if (!current) {
+      await ctx.reply("Question request not found or already handled.")
+      return
+    }
+
+    const answers = parseQuestionAnswers(answerText)
+    if (answers.length !== current.questions.length) {
+      await ctx.reply(
+        `This request expects ${current.questions.length} question answer group(s). Use ';' between questions and ',' between labels.`,
+      )
+      return
+    }
+
+    const beforeAssistantSig = await opts.assistant.getLatestAssistantSignature(sessionID)
+    await opts.assistant.replyQuestion(current.id, answers)
+    announcedQuestionIDs.delete(current.id)
+    await ctx.reply("Answer submitted. Waiting for assistant to continue...")
+    continueAfterUserInput({
+      chatID,
+      userID,
+      sessionID,
+      beforeAssistantSig,
+      source: "command:answer",
+    })
   })
 
   bot.on("callback_query:data", async (ctx) => {
     const parsed = decodeApprovalAction(ctx.callbackQuery.data)
-    if (!parsed) return
+    const parsedQuestion = decodeQuestionAction(ctx.callbackQuery.data)
+    if (!parsed && !parsedQuestion) return
 
     const userID = String(ctx.from?.id ?? "")
+    const chatID = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id
     if (!userID) {
       await ctx.answerCallbackQuery({ text: "Unknown user", show_alert: true })
+      return
+    }
+    if (!chatID) {
+      await ctx.answerCallbackQuery({ text: "Unknown chat", show_alert: true })
       return
     }
     const allowed = opts.whitelist.isWhitelisted("telegram", userID)
@@ -282,33 +471,84 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
     }
 
     const sessionID = await opts.assistant.getMainSessionID()
-    const pending = await opts.assistant.listPendingPermissions(sessionID)
-    const current = pending.find((item) => item.id === parsed.requestID)
-    if (!current) {
-      await ctx.answerCallbackQuery({ text: "Request already handled or expired." })
+
+    if (parsed) {
+      const pending = await opts.assistant.listPendingPermissions(sessionID)
+      const current = pending.find((item) => item.id === parsed.requestID)
+      if (!current) {
+        await ctx.answerCallbackQuery({ text: "Request already handled or expired." })
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+        return
+      }
+
+      const beforeAssistantSig = await opts.assistant.getLatestAssistantSignature(sessionID)
+      await opts.assistant.replyPermission(current.id, parsed.action, undefined, current.sessionID)
+      announcedPermissionIDs.delete(current.id)
+
+      const actionText = parsed.action === "reject" ? "Rejected" : "Approved"
+      await ctx.answerCallbackQuery({ text: `${actionText}.` })
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined })
+
+      if (parsed.action === "reject") {
+        await ctx.reply("Approval rejected.")
+        return
+      }
+
+      const remaining = await opts.assistant.listPendingPermissions(sessionID)
+      if (remaining.length > 0) {
+        await ctx.reply(`Approval submitted. ${remaining.length} approval request(s) still pending.`)
+        return
+      }
+
+      await ctx.reply("Approval submitted. Waiting for assistant to continue...")
+      continueAfterUserInput({
+        chatID,
+        userID,
+        sessionID,
+        beforeAssistantSig,
+        source: "callback:permission",
+      })
+      return
+    }
+
+    const pendingQuestions = await opts.assistant.listPendingQuestions(sessionID)
+    const currentQuestion = pendingQuestions.find((item) => item.id === parsedQuestion?.requestID)
+    if (!currentQuestion || !parsedQuestion) {
+      await ctx.answerCallbackQuery({ text: "Question already handled or expired." })
       await ctx.editMessageReplyMarkup({ reply_markup: undefined })
       return
     }
 
-    await opts.assistant.replyPermission(current.id, parsed.action, undefined, current.sessionID)
-    announcedPermissionIDs.delete(current.id)
+    if (currentQuestion.questions.length !== 1) {
+      await ctx.answerCallbackQuery({ text: "Use /answer for this question type.", show_alert: true })
+      return
+    }
 
-    const actionText = parsed.action === "reject" ? "Rejected" : "Approved"
-    await ctx.answerCallbackQuery({ text: `${actionText}.` })
+    const q = currentQuestion.questions[parsedQuestion.questionIndex]
+    if (!q) {
+      await ctx.answerCallbackQuery({ text: "Invalid question index.", show_alert: true })
+      return
+    }
+    const opt = q.options[parsedQuestion.optionIndex]
+    if (!opt) {
+      await ctx.answerCallbackQuery({ text: "Invalid option.", show_alert: true })
+      return
+    }
+
+    const beforeAssistantSig = await opts.assistant.getLatestAssistantSignature(sessionID)
+    await opts.assistant.replyQuestion(currentQuestion.id, [[opt.label]])
+    announcedQuestionIDs.delete(currentQuestion.id)
+
+    await ctx.answerCallbackQuery({ text: `Selected: ${opt.label}` })
     await ctx.editMessageReplyMarkup({ reply_markup: undefined })
-
-    if (parsed.action === "reject") {
-      await ctx.reply("Approval rejected.")
-      return
-    }
-
-    const remaining = await opts.assistant.listPendingPermissions(sessionID)
-    if (remaining.length > 0) {
-      await ctx.reply(`Approval submitted. ${remaining.length} approval request(s) still pending.`)
-      return
-    }
-
-    await ctx.reply("Approval submitted. Waiting for assistant to continue...")
+    await ctx.reply("Answer submitted. Waiting for assistant to continue...")
+    continueAfterUserInput({
+      chatID,
+      userID,
+      sessionID,
+      beforeAssistantSig,
+      source: "callback:question",
+    })
   })
 
   const handleTextMessage = async (ctx: any) => {
@@ -379,9 +619,9 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       )
 
       try {
-        const pendingCount = await showPendingApprovals(ctx, userID)
-        if (pendingCount > 0) {
-          await ctx.reply("Your request is waiting for approval. Use the buttons above or run /approvals.")
+        const pending = await showPendingApprovals(ctx, userID)
+        if (pending.permissionCount + pending.questionCount > 0) {
+          await ctx.reply("Your request is waiting for approval or question input. Use the buttons above or run /approvals.")
           return
         }
       } catch (approvalError) {
@@ -501,7 +741,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
   bot.on("message:text", (ctx) => {
     const chatID = ctx.chat.id
     if (activeChats.has(chatID)) {
-      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission.")
+      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission or question input.")
       return
     }
 
@@ -514,7 +754,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
   bot.on("message:voice", (ctx) => {
     const chatID = ctx.chat.id
     if (activeChats.has(chatID)) {
-      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission.")
+      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission or question input.")
       return
     }
 
@@ -527,7 +767,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
   bot.on("message:photo", (ctx) => {
     const chatID = ctx.chat.id
     if (activeChats.has(chatID)) {
-      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission.")
+      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission or question input.")
       return
     }
 
@@ -542,7 +782,7 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
     if (!mimeType.startsWith("image/")) return
     const chatID = ctx.chat.id
     if (activeChats.has(chatID)) {
-      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission.")
+      void ctx.reply("Still working on your previous message. You can use /approvals if it is waiting for permission or question input.")
       return
     }
 
@@ -562,8 +802,9 @@ export async function startTelegramAdapter(opts: TelegramAdapterOptions): Promis
       { command: "pair", description: "Pair your Telegram ID" },
       { command: "new", description: "Start a new shared session" },
       { command: "remember", description: "Save durable memory" },
-      { command: "approvals", description: "List pending approvals" },
+      { command: "approvals", description: "List pending approvals/questions" },
       { command: "approval", description: "Alias of /approvals" },
+      { command: "answer", description: "Answer a pending question" },
     ])
   } catch (error) {
     opts.logger.warn({ err: error }, "telegram command registration failed")

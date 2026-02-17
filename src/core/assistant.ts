@@ -25,6 +25,28 @@ export type PendingPermission = {
 
 type PermissionAskedListener = (item: PendingPermission) => void | Promise<void>
 
+export type PendingQuestionOption = {
+  label: string
+  description: string
+}
+
+export type PendingQuestionInfo = {
+  question: string
+  header: string
+  options: PendingQuestionOption[]
+  multiple?: boolean
+  custom?: boolean
+}
+
+export type PendingQuestion = {
+  id: string
+  sessionID: string
+  questions: PendingQuestionInfo[]
+  tool?: { messageID: string; callID: string }
+}
+
+type QuestionAskedListener = (item: PendingQuestion) => void | Promise<void>
+
 type AssistantOptions = {
   model?: string
   agent?: string
@@ -119,6 +141,8 @@ async function extractPromptText(result: unknown): Promise<string> {
 
   return "I could not parse the assistant response."
 }
+
+const PENDING_INTERACTION_SIGNAL = "__PENDING_INTERACTION__"
 
 type SessionMessage = {
   info?: { id?: string; role?: string }
@@ -244,6 +268,8 @@ export class AssistantCore {
   private readonly opts: AssistantOptions
   private readonly pendingPermissions = new Map<string, PendingPermission>()
   private readonly permissionAskedListeners = new Set<PermissionAskedListener>()
+  private readonly pendingQuestions = new Map<string, PendingQuestion>()
+  private readonly questionAskedListeners = new Set<QuestionAskedListener>()
   private eventAbort?: AbortController
 
   constructor(
@@ -324,10 +350,14 @@ export class AssistantCore {
 
     if (assistantText === "I could not parse the assistant response.") {
       this.logger.warn({ sessionID }, "assistant response parse failed; polling messages")
-      const waitedReply = await this.waitForAssistantReply(sessionID, beforeAssistantSig)
+      const waitedReply = await this.waitForAssistantReply(sessionID, beforeAssistantSig, true)
       if (waitedReply) {
-        assistantText = waitedReply
-        usedMessagePolling = true
+        if (waitedReply === PENDING_INTERACTION_SIGNAL) {
+          assistantText = "I need your input to continue. Please answer the pending approval/question in Telegram, then I will proceed."
+        } else {
+          assistantText = waitedReply
+          usedMessagePolling = true
+        }
       }
     }
 
@@ -384,7 +414,15 @@ export class AssistantCore {
   }
 
   async listPendingPermissions(sessionID?: string): Promise<PendingPermission[]> {
+    await this.syncPendingPermissions()
     const out = Array.from(this.pendingPermissions.values())
+    if (!sessionID) return out
+    return out.filter((item) => item.sessionID === sessionID)
+  }
+
+  async listPendingQuestions(sessionID?: string): Promise<PendingQuestion[]> {
+    await this.syncPendingQuestions()
+    const out = Array.from(this.pendingQuestions.values())
     if (!sessionID) return out
     return out.filter((item) => item.sessionID === sessionID)
   }
@@ -428,10 +466,50 @@ export class AssistantCore {
     this.pendingPermissions.delete(requestID)
   }
 
+  async replyQuestion(requestID: string, answers: Array<Array<string>>): Promise<void> {
+    const client = this.ensureClient() as any
+
+    if (client.question?.reply) {
+      await client.question.reply({ requestID, answers })
+      this.pendingQuestions.delete(requestID)
+      return
+    }
+
+    await client._client.post({
+      url: "/question/{requestID}/reply",
+      path: { requestID },
+      body: { answers },
+    })
+    this.pendingQuestions.delete(requestID)
+  }
+
+  async rejectQuestion(requestID: string): Promise<void> {
+    const client = this.ensureClient() as any
+
+    if (client.question?.reject) {
+      await client.question.reject({ requestID })
+      this.pendingQuestions.delete(requestID)
+      return
+    }
+
+    await client._client.post({
+      url: "/question/{requestID}/reject",
+      path: { requestID },
+    })
+    this.pendingQuestions.delete(requestID)
+  }
+
   onPermissionAsked(listener: PermissionAskedListener): () => void {
     this.permissionAskedListeners.add(listener)
     return () => {
       this.permissionAskedListeners.delete(listener)
+    }
+  }
+
+  onQuestionAsked(listener: QuestionAskedListener): () => void {
+    this.questionAskedListeners.add(listener)
+    return () => {
+      this.questionAskedListeners.delete(listener)
     }
   }
 
@@ -606,7 +684,7 @@ export class AssistantCore {
     return created
   }
 
-  private async waitForAssistantReply(sessionID: string, beforeAssistantSig: string): Promise<string | null> {
+  private async waitForAssistantReply(sessionID: string, beforeAssistantSig: string, stopOnPendingInteraction = false): Promise<string | null> {
     const timeoutMs = 60_000
     const intervalMs = 700
     const endAt = Date.now() + timeoutMs
@@ -631,6 +709,14 @@ export class AssistantCore {
             "waiting for assistant reply",
           )
         }
+
+        if (stopOnPendingInteraction && pollCount % 3 === 0) {
+          const hasPending = await this.hasPendingInteraction(sessionID)
+          if (hasPending) {
+            this.logger.info({ sessionID, pollCount }, "assistant reply wait stopped by pending interaction")
+            return PENDING_INTERACTION_SIGNAL
+          }
+        }
       } catch (error) {
         this.logger.warn({ err: error, sessionID, pollCount }, "polling assistant reply failed")
       }
@@ -639,6 +725,42 @@ export class AssistantCore {
 
     this.logger.warn({ sessionID, timeoutMs }, "assistant reply polling timed out")
     return null
+  }
+
+  private async hasPendingInteraction(sessionID: string): Promise<boolean> {
+    const client = this.ensureClient() as any
+
+    try {
+      if (client.permission?.list) {
+        const permissionsResult = await client.permission.list({})
+        const permissions = unwrap<unknown>(permissionsResult)
+        if (
+          Array.isArray(permissions) &&
+          permissions.some((item) => item && typeof item === "object" && (item as Record<string, unknown>).sessionID === sessionID)
+        ) {
+          return true
+        }
+      }
+    } catch (error) {
+      this.logger.debug({ err: error, sessionID }, "pending permission check failed")
+    }
+
+    try {
+      if (client.question?.list) {
+        const questionsResult = await client.question.list({})
+        const questions = unwrap<unknown>(questionsResult)
+        if (
+          Array.isArray(questions) &&
+          questions.some((item) => item && typeof item === "object" && (item as Record<string, unknown>).sessionID === sessionID)
+        ) {
+          return true
+        }
+      }
+    } catch (error) {
+      this.logger.debug({ err: error, sessionID }, "pending question check failed")
+    }
+
+    return false
   }
 
   private async buildNoReplyDiagnostic(sessionID: string): Promise<Record<string, unknown>> {
@@ -740,6 +862,25 @@ export class AssistantCore {
       const p = event.properties as Record<string, unknown> | undefined
       const requestID = typeof p?.permissionID === "string" ? p.permissionID : typeof p?.requestID === "string" ? p.requestID : ""
       if (requestID) this.pendingPermissions.delete(requestID)
+      return
+    }
+
+    if (event.type === "question.asked") {
+      const mapped = this.mapQuestionFromEvent(event.properties)
+      if (!mapped) return
+      this.pendingQuestions.set(mapped.id, mapped)
+      for (const listener of this.questionAskedListeners) {
+        void Promise.resolve(listener(mapped)).catch((err) => {
+          this.logger.warn({ err }, "question listener failed")
+        })
+      }
+      return
+    }
+
+    if (event.type === "question.replied" || event.type === "question.rejected") {
+      const p = event.properties as Record<string, unknown> | undefined
+      const requestID = typeof p?.requestID === "string" ? p.requestID : ""
+      if (requestID) this.pendingQuestions.delete(requestID)
     }
   }
 
@@ -765,11 +906,90 @@ export class AssistantCore {
     return { id, sessionID, permission, patterns, always, metadata }
   }
 
+  private mapQuestionFromEvent(properties: unknown): PendingQuestion | null {
+    if (!properties || typeof properties !== "object") return null
+    const p = properties as Record<string, unknown>
+    const id = typeof p.id === "string" ? p.id : ""
+    const sessionID = typeof p.sessionID === "string" ? p.sessionID : ""
+    if (!id || !sessionID) return null
+
+    const rawQuestions = Array.isArray(p.questions) ? p.questions : []
+    const questions: PendingQuestionInfo[] = []
+    for (const rawQuestion of rawQuestions) {
+      if (!rawQuestion || typeof rawQuestion !== "object") continue
+      const q = rawQuestion as Record<string, unknown>
+      const question = typeof q.question === "string" ? q.question : ""
+      const header = typeof q.header === "string" ? q.header : ""
+      const multiple = typeof q.multiple === "boolean" ? q.multiple : undefined
+      const custom = typeof q.custom === "boolean" ? q.custom : undefined
+      const optionsRaw = Array.isArray(q.options) ? q.options : []
+      const options: PendingQuestionOption[] = []
+      for (const rawOption of optionsRaw) {
+        if (!rawOption || typeof rawOption !== "object") continue
+        const option = rawOption as Record<string, unknown>
+        const label = typeof option.label === "string" ? option.label : ""
+        const description = typeof option.description === "string" ? option.description : ""
+        if (!label) continue
+        options.push({ label, description })
+      }
+      if (!question || !header) continue
+      questions.push({ question, header, options, multiple, custom })
+    }
+
+    const rawTool = p.tool
+    const tool =
+      rawTool && typeof rawTool === "object"
+        ? {
+            messageID: typeof (rawTool as Record<string, unknown>).messageID === "string" ? (rawTool as Record<string, unknown>).messageID as string : "",
+            callID: typeof (rawTool as Record<string, unknown>).callID === "string" ? (rawTool as Record<string, unknown>).callID as string : "",
+          }
+        : undefined
+
+    const normalizedTool = tool && tool.messageID && tool.callID ? tool : undefined
+    return { id, sessionID, questions, tool: normalizedTool }
+  }
+
   private ensureClient(): OpencodeClient {
     if (!this.client) {
       throw new Error("AssistantCore is not initialized. Call init() before ask()/heartbeat().")
     }
     return this.client
+  }
+
+  private async syncPendingPermissions(): Promise<void> {
+    const client = this.ensureClient() as any
+    if (!client.permission?.list) return
+    try {
+      const result = await client.permission.list({})
+      const list = unwrap<unknown>(result)
+      if (!Array.isArray(list)) return
+      this.pendingPermissions.clear()
+      for (const item of list) {
+        const mapped = this.mapPermissionFromEvent(item)
+        if (!mapped) continue
+        this.pendingPermissions.set(mapped.id, mapped)
+      }
+    } catch (error) {
+      this.logger.warn({ err: error }, "sync pending permissions failed")
+    }
+  }
+
+  private async syncPendingQuestions(): Promise<void> {
+    const client = this.ensureClient() as any
+    if (!client.question?.list) return
+    try {
+      const result = await client.question.list({})
+      const list = unwrap<unknown>(result)
+      if (!Array.isArray(list)) return
+      this.pendingQuestions.clear()
+      for (const item of list) {
+        const mapped = this.mapQuestionFromEvent(item)
+        if (!mapped) continue
+        this.pendingQuestions.set(mapped.id, mapped)
+      }
+    } catch (error) {
+      this.logger.warn({ err: error }, "sync pending questions failed")
+    }
   }
 
   private async loadHeartbeatTasks(): Promise<string[]> {

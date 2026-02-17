@@ -111,7 +111,8 @@ In Telegram chat:
 
 - `/remember <text>`: force-save durable memory in `.data/workspace/MEMORY.md`
 - `/pair <token>`: add your account to whitelist (if pairing token is configured)
-- `/approvals`: list pending OpenCode permission approvals with Telegram action buttons
+- `/approvals`: list pending OpenCode permission approvals and question prompts with Telegram action buttons
+- `/answer <requestID> <answers>`: answer a pending OpenCode question when manual text input is required
 
 Pairing protection (new):
 - Failed `/pair` attempts are tracked per `channel:userID` in `.data/pair-attempts.json`.

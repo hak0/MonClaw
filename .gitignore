@@ -3,3 +3,4 @@ node_modules
 .data
 .tmp
 *.log
+.opencode/agents/InuChan.md
