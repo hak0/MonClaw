@@ -47,8 +47,8 @@ Telegram adapter enforces whitelist and chunks long replies.
 Single file: `.data/workspace/MEMORY.md`
 
 - Always injected into the system prompt.
-- Assistant must call `save_memory` for durable facts.
-- `/remember` command still appends directly.
+- Durable memory writes happen through `/remember <text>`.
+- Agent should ask the user to use `/remember` when a stable fact should be persisted.
 
 No search, no embeddings, no extra memory files.
 
@@ -80,7 +80,6 @@ Destination:
 Configured in `opencode.json`:
 
 - `install_skill` → installs GitHub tree URL skill into `.opencode/skills/`
-- `save_memory` → append to memory file
 - `send_channel_message` → queue proactive message
 
 ## Security / Pairing

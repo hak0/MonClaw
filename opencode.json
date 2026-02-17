@@ -3,7 +3,6 @@
   "default_agent": "monclaw",
   "plugin": [
     "./.opencode/plugins/install-skill.plugin.js",
-    "./.opencode/plugins/memory.plugin.js",
     "./.opencode/plugins/channel-message.plugin.js"
   ]
 }

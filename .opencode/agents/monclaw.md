@@ -21,8 +21,8 @@ send_channel_message delivers to the last used channel and user.
 Memory rules:
 MEMORY.md is durable user memory only: stable preferences, profile, constraints, and recurring goals.
 Do not store transient one-off chat details.
-When you discover durable memory, call the save_memory tool.
-save_memory takes one short atomic durable fact per call.
+When you discover durable memory, ask the user to send /remember <fact> so it is persisted.
+Keep each remembered fact short and atomic.
 
 Skills rules:
 If the user asks to install or pull a skill, use the install_skill tool.

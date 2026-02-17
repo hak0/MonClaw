@@ -6,7 +6,7 @@ MonClaw is a minimal implementation of OpenClaw using the OpenCode SDK.
 
 - Telegram adapter (`grammy`)
 - Single markdown memory file (`MEMORY.md`) loaded on every message
-- Proactive memory updates via an OpenCode plugin tool (`save_memory`)
+- Durable memory updates via Telegram command (`/remember <text>`)
 - Heartbeat task runner (periodic checklist from `heartbeat.md`)
 - Channel-level whitelist with disk persistence
 
