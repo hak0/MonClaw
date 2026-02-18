@@ -406,7 +406,46 @@ export class AssistantCore {
         parts: [{ type: "text", text: content }],
         ...(this.modelConfig ? { model: this.modelConfig } : {}),
       },
+      } as never)
+  }
+
+  async reportHeartbeatFailure(reason: string): Promise<void> {
+    const detail = reason.trim() || "Unknown heartbeat error"
+    const mainSessionID = await this.getOrCreateMainSession()
+    const client = this.ensureClient()
+    const failureSummary = `Heartbeat failed: ${detail}`
+
+    await client.session.prompt({
+      path: { id: mainSessionID },
+      body: {
+        noReply: true,
+        ...(this.opts.agent ? { agent: this.opts.agent } : {}),
+        parts: [{ type: "text", text: `[Heartbeat summary]\\n${failureSummary}` }],
+        ...(this.modelConfig ? { model: this.modelConfig } : {}),
+      },
     } as never)
+
+    await client.session.prompt({
+      path: { id: mainSessionID },
+      body: {
+        noReply: false,
+        ...(this.opts.agent ? { agent: this.opts.agent } : {}),
+        parts: [
+          {
+            type: "text",
+            text: [
+              "Heartbeat failure summary was added to context.",
+              "Decide whether the user should be proactively informed now.",
+              "If yes, call send_channel_message with a concise plain-text message.",
+              "If not needed, do nothing.",
+            ].join("\n"),
+          },
+        ],
+        ...(this.modelConfig ? { model: this.modelConfig } : {}),
+      },
+    } as never)
+
+    this.logger.info({ mainSessionID, failureSummary }, "heartbeat failure reported to main session")
   }
 
   async getMainSessionID(): Promise<string> {

@@ -2,7 +2,13 @@
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "monclaw",
   "permission": {
-    "async_bash": "ask"
+    "async_bash": "ask",
+    "todoread": "allow",
+    "todowrite": "allow",
+    "bash": {
+      "date '+%Y-%m-%d %H:%M %Z (%u)'": "allow",
+      "date +%Y-%m-%d %H:%M %Z (%u)": "allow"
+    }
   },
   "plugin": [
     "./.opencode/plugins/install-skill.plugin.js",

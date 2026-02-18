@@ -45,7 +45,13 @@ async function main() {
       "heartbeat.md is empty. Add one task per line to enable periodic heartbeat. Leaving it empty disables heartbeat.",
     )
   } else {
-    startHeartbeat(cfg.heartbeatIntervalMinutes, assistant, logger)
+    startHeartbeat({
+      intervalMinutes: cfg.heartbeatIntervalMinutes,
+      timeoutSeconds: cfg.heartbeatTimeoutSeconds,
+      startupDelaySeconds: cfg.heartbeatStartupDelaySeconds,
+      assistant,
+      logger,
+    })
   }
 
   startAsyncBashScheduler({

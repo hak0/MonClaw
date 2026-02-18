@@ -4,6 +4,8 @@ export type AppConfig = {
   appName: string
   logLevel: string
   heartbeatIntervalMinutes: number
+  heartbeatTimeoutSeconds: number
+  heartbeatStartupDelaySeconds: number
   heartbeatFile: string
   asyncBashQueueDir: string
   asyncBashConcurrency: number
@@ -50,6 +52,8 @@ export async function loadConfig(): Promise<AppConfig> {
     appName: Bun.env.APP_NAME ?? "monclaw",
     logLevel: Bun.env.LOG_LEVEL ?? "info",
     heartbeatIntervalMinutes: envInt(Bun.env.HEARTBEAT_INTERVAL_MINUTES, 30),
+    heartbeatTimeoutSeconds: envInt(Bun.env.HEARTBEAT_TIMEOUT_SECONDS, 90),
+    heartbeatStartupDelaySeconds: envInt(Bun.env.HEARTBEAT_STARTUP_DELAY_SECONDS, 60),
     heartbeatFile: resolvePath(cwd, Bun.env.HEARTBEAT_FILE ?? ".data/heartbeat.md"),
     asyncBashQueueDir: resolvePath(cwd, Bun.env.ASYNC_BASH_QUEUE_DIR ?? ".data/async-jobs"),
     asyncBashConcurrency: envInt(Bun.env.ASYNC_BASH_CONCURRENCY, 1),

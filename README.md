@@ -59,6 +59,8 @@ Optional:
 - `OPENCODE_SERVER_PASSWORD` if that server enforces HTTP Basic auth
 - `OPENCODE_SERVER_USERNAME` optional username for Basic auth (defaults to empty username)
 - `HEARTBEAT_INTERVAL_MINUTES` (default 30)
+- `HEARTBEAT_TIMEOUT_SECONDS` (default 90, fail current heartbeat run when exceeded)
+- `HEARTBEAT_STARTUP_DELAY_SECONDS` (default 60, delay heartbeat scheduler start after app boot)
 - `HEARTBEAT_FILE` (default `.data/heartbeat.md`; empty file disables heartbeat)
 - `ASYNC_BASH_QUEUE_DIR` (default `.data/async-jobs`)
 - `ASYNC_BASH_CONCURRENCY` (default 1)
